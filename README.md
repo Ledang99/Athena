@@ -7,7 +7,7 @@ exact or possible duplicate files.
 This first release is intentionally read-only: Athena does not rename, move,
 delete, or upload ebooks.
 
-## Current features
+## Windows features
 
 - Scan multiple ebook folders and their subfolders
 - Read PDF and EPUB title, author, and ISBN metadata
@@ -65,6 +65,36 @@ default, so it is available only on the laptop.
 
 No file operation is performed from either report.
 
+## Android app
+
+The native app in [`android/`](android/) is the phone-first reading inbox:
+
+- Select a Downloads or ebook folder with Android's system folder picker
+- Scan PDF and EPUB files without broad storage permissions
+- Search locally by title or author
+- Detect exact copies and likely alternate editions
+- Edit incorrect title or author metadata
+- Open an ebook directly in Moon+ Reader
+- Save selected Moon+ passages through **Share → Project Athena**
+
+The catalog and captured passages stay in the app's private SQLite database.
+Folder access is read-only, and Athena never deletes or moves an ebook.
+
+### Build and install
+
+Open `android/` in Android Studio, or use JDK 17 or newer and an Android SDK:
+
+```bash
+cd android
+./gradlew assembleDebug
+```
+
+Install the generated APK on a USB-connected phone:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
 ## Development checks
 
 ```powershell
@@ -73,39 +103,12 @@ npm run lint
 npm run build
 ```
 
-## Planned later
-
-Text extraction, topic search, Ollama-powered summaries, and an Android client
-are intentionally outside this first milestone.
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+cd android
+./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Planned later
+
+Laptop pairing, Wi-Fi transfer, text extraction, topic search, and
+Ollama-powered summaries are intentionally outside this Android test build.
