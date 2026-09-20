@@ -18,6 +18,10 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+.android-sdk/
+android/local.properties
+android/.gradle/
+android/**/build/
 
 # Editor directories and files
 .vscode/*

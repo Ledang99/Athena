@@ -1,0 +1,134 @@
+package com.projectathena.app
+
+import android.app.Application
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.projectathena.app.data.Book
+import com.projectathena.app.data.CapturedNote
+import com.projectathena.app.data.DuplicateKind
+import com.projectathena.app.data.EbookRepository
+import com.projectathena.app.data.duplicateKinds
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+data class AthenaUiState(
+    val books: List<Book> = emptyList(),
+    val notes: List<CapturedNote> = emptyList(),
+    val duplicateKinds: Map<Long, DuplicateKind> = emptyMap(),
+    val scanning: Boolean = false,
+    val scannedCount: Int = 0,
+    val libraryFolder: String? = null,
+    val message: String? = null,
+)
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = EbookRepository(application)
+    private val preferences = application.getSharedPreferences(PREFERENCES, 0)
+    private val operationActive = AtomicBoolean(false)
+    private val _uiState = MutableStateFlow(
+        AthenaUiState(libraryFolder = preferences.getString(LIBRARY_FOLDER, null)),
+    )
+    val uiState: StateFlow<AthenaUiState> = _uiState.asStateFlow()
+
+    init {
+        refresh()
+    }
+
+    fun scanFolder(uri: Uri) {
+        if (!operationActive.compareAndSet(false, true)) return
+        preferences.edit().putString(LIBRARY_FOLDER, uri.toString()).apply()
+        _uiState.update {
+            it.copy(scanning = true, scannedCount = 0, libraryFolder = uri.toString())
+        }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                repository.scanFolder(uri) { count ->
+                    _uiState.update { state -> state.copy(scannedCount = count) }
+                }
+            }
+            operationActive.set(false)
+            loadCatalog(
+                message = result.message
+                    ?: "Indexed ${result.indexed} ebook${if (result.indexed == 1) "" else "s"}" +
+                    if (result.errors > 0) " · ${result.errors} skipped" else "",
+            )
+        }
+    }
+
+    fun rescan() {
+        _uiState.value.libraryFolder?.let { scanFolder(Uri.parse(it)) }
+    }
+
+    fun importFiles(uris: List<Uri>) {
+        if (uris.isEmpty() || !operationActive.compareAndSet(false, true)) return
+        _uiState.update { it.copy(scanning = true, scannedCount = 0) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { repository.importFiles(uris) }
+            operationActive.set(false)
+            loadCatalog(
+                message = "Imported ${result.indexed} ebook${if (result.indexed == 1) "" else "s"}" +
+                    if (result.errors > 0) " · ${result.errors} skipped" else "",
+            )
+        }
+    }
+
+    fun captureSharedText(text: String, sourcePackage: String?) {
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repository.captureNote(text, sourcePackage) }
+            loadCatalog(message = "Passage saved to Athena notes")
+        }
+    }
+
+    fun updateMetadata(book: Book, title: String, author: String?) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.updateMetadata(book.id, title, author)
+            }
+            loadCatalog(message = "Book details updated")
+        }
+    }
+
+    fun markOpened(book: Book) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repository.markOpened(book.id) }
+            loadCatalog()
+        }
+    }
+
+    fun clearMessage() {
+        _uiState.update { it.copy(message = null) }
+    }
+
+    private fun refresh() {
+        viewModelScope.launch { loadCatalog() }
+    }
+
+    private suspend fun loadCatalog(message: String? = null) {
+        val (books, notes) = withContext(Dispatchers.IO) {
+            repository.books() to repository.notes()
+        }
+        _uiState.update {
+            it.copy(
+                books = books,
+                notes = notes,
+                duplicateKinds = duplicateKinds(books),
+                scanning = false,
+                scannedCount = 0,
+                message = message,
+            )
+        }
+    }
+
+    companion object {
+        private const val PREFERENCES = "athena_preferences"
+        private const val LIBRARY_FOLDER = "library_folder"
+    }
+}
