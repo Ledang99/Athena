@@ -69,6 +69,9 @@ No file operation is performed from either report.
 
 The native app in [`android/`](android/) is the phone-first reading inbox:
 
+Download the current test build:
+[`project-athena-v0.1.0-debug.apk`](releases/project-athena-v0.1.0-debug.apk)
+
 - Select a Downloads or ebook folder with Android's system folder picker
 - Scan PDF and EPUB files without broad storage permissions
 - Search locally by title or author
