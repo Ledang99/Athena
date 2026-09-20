@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Database,
+  Download,
   Files,
   FolderOpen,
   Library,
@@ -18,7 +19,7 @@ import {
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -286,13 +287,28 @@ function App() {
               <span className="size-2 rounded-full bg-emerald-500" />
               Running locally
             </div>
-            <Button
-              onClick={() => setFolderDialogOpen(true)}
-              className="rounded-full bg-[#12231f] px-4 text-white hover:bg-[#1b352f]"
-            >
-              <Plus className="size-4" />
-              Add folder
-            </Button>
+            <div className="flex items-center gap-2">
+              <a
+                href="/api/downloads/android"
+                download
+                className={buttonVariants({
+                  variant: 'outline',
+                  className: 'rounded-full bg-white px-4',
+                })}
+              >
+                <Download className="size-4" />
+                <span className="hidden sm:inline">Download Android APK</span>
+                <span className="sm:hidden">APK</span>
+              </a>
+              <Button
+                onClick={() => setFolderDialogOpen(true)}
+                className="rounded-full bg-[#12231f] px-4 text-white hover:bg-[#1b352f]"
+              >
+                <Plus className="size-4" />
+                <span className="hidden sm:inline">Add folder</span>
+                <span className="sm:hidden">Folder</span>
+              </Button>
+            </div>
           </div>
           <nav className="flex gap-1 overflow-x-auto px-4 pb-3 lg:hidden">
             {(['overview', 'library', 'duplicates'] as View[]).map((item) => (

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -38,6 +41,31 @@ def create_app(database_path: Path | str | None = None) -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/downloads/android")
+    def download_android_apk() -> StreamingResponse:
+        apk_path = (
+            Path(__file__).resolve().parent.parent
+            / "releases"
+            / "project-athena-v0.1.0-debug.apk"
+        )
+        if not apk_path.exists():
+            raise HTTPException(status_code=404, detail="Android build is unavailable")
+
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.write(apk_path, arcname=apk_path.name)
+        archive.seek(0)
+        return StreamingResponse(
+            archive,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="project-athena-android-v0.1.0.zip"'
+                ),
+                "Content-Length": str(archive.getbuffer().nbytes),
+            },
+        )
 
     @app.get("/api/folders")
     def list_folders() -> list[dict[str, Any]]:

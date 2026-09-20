@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pymupdf
@@ -104,3 +106,15 @@ def test_rescan_removes_missing_files_from_catalog(tmp_path: Path) -> None:
     stats = client.get("/api/stats").json()
     assert stats["total"] == 3
     assert stats["epub"] == 0
+
+
+def test_android_download_is_a_valid_zip_archive(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "athena.db")
+    response = TestClient(app).get("/api/downloads/android")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "attachment" in response.headers["content-disposition"]
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.testzip() is None
+        assert archive.namelist() == ["project-athena-v0.1.0-debug.apk"]
