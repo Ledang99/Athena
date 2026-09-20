@@ -4,6 +4,8 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import com.projectathena.app.data.Book
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.DuplicateKind
@@ -43,38 +45,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun scanFolder(uri: Uri) {
         if (!operationActive.compareAndSet(false, true)) return
-        preferences.edit().putString(LIBRARY_FOLDER, uri.toString()).apply()
+        preferences.edit { putString(LIBRARY_FOLDER, uri.toString()) }
         _uiState.update {
             it.copy(scanning = true, scannedCount = 0, libraryFolder = uri.toString())
         }
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                repository.scanFolder(uri) { count ->
-                    _uiState.update { state -> state.copy(scannedCount = count) }
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.scanFolder(uri) { count ->
+                        _uiState.update { state -> state.copy(scannedCount = count) }
+                    }
                 }
             }
             operationActive.set(false)
-            loadCatalog(
-                message = result.message
-                    ?: "Indexed ${result.indexed} ebook${if (result.indexed == 1) "" else "s"}" +
-                    if (result.errors > 0) " · ${result.errors} skipped" else "",
+            outcome.fold(
+                onSuccess = { result ->
+                    loadCatalog(
+                        message = result.message
+                            ?: "Indexed ${result.indexed} ebook${if (result.indexed == 1) "" else "s"}" +
+                            if (result.errors > 0) " · ${result.errors} skipped" else "",
+                    )
+                },
+                onFailure = { error ->
+                    loadCatalog(message = error.message ?: "Folder scan failed")
+                },
             )
         }
     }
 
     fun rescan() {
-        _uiState.value.libraryFolder?.let { scanFolder(Uri.parse(it)) }
+        _uiState.value.libraryFolder?.let { scanFolder(it.toUri()) }
     }
 
     fun importFiles(uris: List<Uri>) {
         if (uris.isEmpty() || !operationActive.compareAndSet(false, true)) return
         _uiState.update { it.copy(scanning = true, scannedCount = 0) }
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { repository.importFiles(uris) }
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) { repository.importFiles(uris) }
+            }
             operationActive.set(false)
-            loadCatalog(
-                message = "Imported ${result.indexed} ebook${if (result.indexed == 1) "" else "s"}" +
-                    if (result.errors > 0) " · ${result.errors} skipped" else "",
+            outcome.fold(
+                onSuccess = { result ->
+                    loadCatalog(
+                        message = "Imported ${result.indexed} ebook${if (result.indexed == 1) "" else "s"}" +
+                            if (result.errors > 0) " · ${result.errors} skipped" else "",
+                    )
+                },
+                onFailure = { error ->
+                    loadCatalog(message = error.message ?: "File import failed")
+                },
             )
         }
     }

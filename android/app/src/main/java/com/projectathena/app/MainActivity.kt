@@ -1,15 +1,14 @@
 package com.projectathena.app
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.core.net.toUri
 import com.projectathena.app.data.Book
 
 class MainActivity : ComponentActivity() {
@@ -44,7 +43,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openBook(book: Book) {
-        val uri = Uri.parse(book.uri)
+        val uri = book.uri.toUri()
         val baseIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, book.mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

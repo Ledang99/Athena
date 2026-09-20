@@ -141,11 +141,11 @@ class EbookRepository(private val context: Context) {
 
     private fun readEpubMetadata(uri: Uri): EbookMetadata = runCatching {
         resolver.openInputStream(uri)?.use { input ->
-            ZipInputStream(input).use { zip ->
+            ZipInputStream(input).use zipUse@ { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (!entry.isDirectory && entry.name.endsWith(".opf", ignoreCase = true)) {
-                        return@use parseOpf(readLimited(zip, 2 * 1024 * 1024))
+                        return@zipUse parseOpf(readLimited(zip, 2 * 1024 * 1024))
                     }
                 }
                 EbookMetadata()

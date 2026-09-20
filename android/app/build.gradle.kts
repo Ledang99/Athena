@@ -61,7 +61,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.documentfile:documentfile:1.1.0")
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0") {
+        // Athena reads basic document metadata and does not process PDF signatures.
+        exclude(group = "org.bouncycastle")
+    }
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
