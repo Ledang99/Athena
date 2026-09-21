@@ -9,6 +9,8 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import androidx.documentfile.provider.DocumentFile
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -255,7 +257,7 @@ class EbookRepository(private val context: Context) {
                         val height = (width * page.height.toFloat() / page.width)
                             .toInt()
                             .coerceIn(COVER_WIDTH, COVER_MAX_HEIGHT)
-                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        val bitmap = createBitmap(width, height)
                         bitmap.eraseColor(Color.WHITE)
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         saveCover(bitmap, destination)
@@ -307,19 +309,16 @@ class EbookRepository(private val context: Context) {
             COVER_MAX_HEIGHT.toFloat() / source.height.coerceAtLeast(1),
         )
         if (scale >= 1f) return source
-        return Bitmap.createScaledBitmap(
-            source,
+        return source.scale(
             (source.width * scale).toInt().coerceAtLeast(1),
             (source.height * scale).toInt().coerceAtLeast(1),
-            true,
         )
     }
 
     private fun saveCover(source: Bitmap, destination: File) {
-        val flattened = Bitmap.createBitmap(
+        val flattened = createBitmap(
             source.width,
             source.height,
-            Bitmap.Config.ARGB_8888,
         )
         Canvas(flattened).apply {
             drawColor(Color.WHITE)
