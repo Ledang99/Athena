@@ -45,6 +45,33 @@ class EbookRepository(private val context: Context) {
         if (title.isNotBlank()) database.updateMetadata(bookId, title, author)
     }
 
+    fun updateOrganization(
+        bookId: Long,
+        title: String,
+        author: String?,
+        tags: List<String>,
+        collections: List<String>,
+        readingStatus: ReadingStatus,
+    ) {
+        if (title.isBlank()) return
+        database.updateOrganization(
+            bookId = bookId,
+            title = title,
+            author = author,
+            tags = tags,
+            collections = collections,
+            readingStatus = readingStatus,
+        )
+    }
+
+    fun updateReadingStatus(bookId: Long, status: ReadingStatus) {
+        database.updateReadingStatus(bookId, status)
+    }
+
+    fun updateNoteCollections(noteId: Long, collections: List<String>) {
+        database.updateNoteCollections(noteId, collections)
+    }
+
     fun markOpened(bookId: Long) = database.markOpened(bookId)
 
     fun scanFolder(
@@ -175,9 +202,15 @@ class EbookRepository(private val context: Context) {
         val modifiedAt = document.lastModified().coerceAtLeast(0)
         val folderName = document.parentFile?.name
         val existing = database.bookByUri(uri.toString())
+        val needsOrganizationBackfill = existing != null &&
+            !existing.tagsManual &&
+            existing.tags.isEmpty() &&
+            !existing.collectionsManual &&
+            existing.collections.isEmpty()
 
         if (
             existing != null &&
+            !needsOrganizationBackfill &&
             existing.sizeBytes == size &&
             existing.modifiedAt == modifiedAt &&
             existing.coverPath?.let { File(it).isFile } == true
@@ -201,11 +234,18 @@ class EbookRepository(private val context: Context) {
             else -> null
         }
         val fallback = filenameMetadata(displayName)
+        val title = metadata.title?.takeIf { it.isNotBlank() } ?: fallback.title.orEmpty()
+        val author = metadata.author?.takeIf { it.isNotBlank() } ?: fallback.author
+        val metadataTags = normalizeTags(metadata.subjects)
+        val mappedCollections = LibraryCollection.matchAll(
+            metadataTags + listOfNotNull(title, author, folderName, displayName),
+        ).map { it.id }
+
         return Book(
             uri = uri.toString(),
             displayName = displayName,
-            title = metadata.title?.takeIf { it.isNotBlank() } ?: fallback.title.orEmpty(),
-            author = metadata.author?.takeIf { it.isNotBlank() } ?: fallback.author,
+            title = title,
+            author = author,
             mimeType = mimeType,
             sizeBytes = size,
             modifiedAt = modifiedAt,
@@ -213,6 +253,15 @@ class EbookRepository(private val context: Context) {
             coverPath = coverPath,
             sourceFolder = sourceFolder,
             folderName = folderName,
+            tags = if (existing?.tagsManual == true) existing.tags else metadataTags,
+            tagsManual = existing?.tagsManual == true,
+            collections = if (existing?.collectionsManual == true) {
+                existing.collections
+            } else {
+                mappedCollections
+            },
+            collectionsManual = existing?.collectionsManual == true,
+            readingStatus = existing?.readingStatus ?: ReadingStatus.UNREAD,
             addedAt = existing?.addedAt ?: System.currentTimeMillis(),
             lastOpenedAt = existing?.lastOpenedAt,
         )
@@ -221,9 +270,15 @@ class EbookRepository(private val context: Context) {
     private fun readPdfMetadata(uri: Uri): EbookMetadata = runCatching {
         resolver.openInputStream(uri)?.use { input ->
             PDDocument.load(input).use { document ->
+                val info = document.documentInformation
+                val subjects = buildList {
+                    info?.subject?.let { add(it) }
+                    info?.keywords?.let { add(it) }
+                }
                 EbookMetadata(
-                    title = document.documentInformation?.title,
-                    author = document.documentInformation?.author,
+                    title = info?.title,
+                    author = info?.author,
+                    subjects = subjects,
                 )
             }
         } ?: EbookMetadata()
@@ -253,12 +308,18 @@ class EbookRepository(private val context: Context) {
         var title: String? = null
         var author: String? = null
         var coverId: String? = null
+        val subjects = mutableListOf<String>()
         val images = mutableListOf<ManifestImage>()
         while (parser.eventType != XmlPullParser.END_DOCUMENT) {
             if (parser.eventType == XmlPullParser.START_TAG) {
                 when (parser.name.substringAfter(':').lowercase()) {
                     "title" -> if (title == null) title = runCatching { parser.nextText() }.getOrNull()
                     "creator" -> if (author == null) author = runCatching { parser.nextText() }.getOrNull()
+                    "subject" -> {
+                        runCatching { parser.nextText() }.getOrNull()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { subjects += it }
+                    }
                     "meta" -> {
                         if (parser.attribute("name").equals("cover", ignoreCase = true)) {
                             coverId = parser.attribute("content")
@@ -288,6 +349,7 @@ class EbookRepository(private val context: Context) {
         return EbookMetadata(
             title = title?.trim(),
             author = author?.trim(),
+            subjects = subjects,
             coverEntry = coverImage?.href
                 ?.takeIf { it.isNotBlank() }
                 ?.let { resolveZipEntry(opfEntry, it) },
@@ -478,6 +540,7 @@ class EbookRepository(private val context: Context) {
     private data class EbookMetadata(
         val title: String? = null,
         val author: String? = null,
+        val subjects: List<String> = emptyList(),
         val coverEntry: String? = null,
     )
 

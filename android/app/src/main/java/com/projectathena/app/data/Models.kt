@@ -15,6 +15,11 @@ data class Book(
     val coverPath: String?,
     val sourceFolder: String?,
     val folderName: String?,
+    val tags: List<String> = emptyList(),
+    val tagsManual: Boolean = false,
+    val collections: List<String> = emptyList(),
+    val collectionsManual: Boolean = false,
+    val readingStatus: ReadingStatus = ReadingStatus.UNREAD,
     val addedAt: Long,
     val lastOpenedAt: Long?,
 )
@@ -23,6 +28,7 @@ data class CapturedNote(
     val id: Long,
     val text: String,
     val sourcePackage: String?,
+    val collections: List<String> = emptyList(),
     val createdAt: Long,
 )
 
@@ -115,3 +121,21 @@ fun catalogStatsFromBooks(books: List<Book>): CatalogStats = CatalogStats(
         it.mimeType == "application/epub+zip" || it.mimeType == "application/x-epub+zip"
     },
 )
+
+fun sortBooks(books: List<Book>, sort: LibrarySort): List<Book> = when (sort) {
+    LibrarySort.TITLE -> books.sortedWith(
+        compareBy<Book>({ it.title.lowercase() }, { it.author.orEmpty().lowercase() }),
+    )
+    LibrarySort.RECENTLY_OPENED -> books.sortedWith(
+        compareByDescending<Book> { it.lastOpenedAt ?: 0L }
+            .thenBy { it.title.lowercase() },
+    )
+    LibrarySort.RECENTLY_ADDED -> books.sortedWith(
+        compareByDescending<Book> { it.addedAt }
+            .thenBy { it.title.lowercase() },
+    )
+    LibrarySort.STATUS -> books.sortedWith(
+        compareBy<Book> { it.readingStatus.ordinal }
+            .thenBy { it.title.lowercase() },
+    )
+}

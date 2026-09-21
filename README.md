@@ -70,11 +70,14 @@ No file operation is performed from either report.
 The native app in [`android/`](android/) is the phone-first reading inbox:
 
 Download the current test build:
-[`project-athena-v0.4.0-debug.zip`](releases/project-athena-v0.4.0-debug.zip)
+[`project-athena-v0.5.0-debug.zip`](releases/project-athena-v0.5.0-debug.zip)
 
 - Select a Downloads or ebook folder with Android's system folder picker
 - Scan PDF and EPUB files without broad storage permissions
-- Search locally by title or author
+- Search locally by title, author, or tag
+- Capture category tags from ebook metadata, with manual edits that survive rescan
+- Organize books and notes into standard collections (Habits, Investing, and more)
+- Track reading status (Unread / Reading / Finished) and sort by recently opened
 - Show library totals from the catalog database (all indexed PDF and EPUB files)
 - Detect exact copies (SHA-256) and likely matches (title + size + type)
 - Show duplicate copy counts and the folder each copy lives in

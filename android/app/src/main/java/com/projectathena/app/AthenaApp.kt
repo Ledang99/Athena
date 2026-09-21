@@ -75,7 +75,12 @@ import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
+import com.projectathena.app.data.LibraryCollection
+import com.projectathena.app.data.LibrarySort
+import com.projectathena.app.data.ReadingStatus
 import com.projectathena.app.data.ScanProgress
+import com.projectathena.app.data.collectionLabels
+import com.projectathena.app.data.sortBooks
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -93,6 +98,13 @@ private enum class FileFilter(val label: String) {
     ALL("All"),
     PDF("PDF"),
     EPUB("EPUB"),
+}
+
+private enum class StatusFilter(val label: String, val status: ReadingStatus?) {
+    ALL("All status", null),
+    UNREAD("Unread", ReadingStatus.UNREAD),
+    READING("Reading", ReadingStatus.READING),
+    FINISHED("Finished", ReadingStatus.FINISHED),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -260,7 +272,8 @@ fun AthenaApp(
                     },
                     onRescan = viewModel::rescan,
                     onOpenBook = onOpenBook,
-                    onUpdateMetadata = viewModel::updateMetadata,
+                    onUpdateOrganization = viewModel::updateOrganization,
+                    onUpdateReadingStatus = viewModel::updateReadingStatus,
                 )
 
                 Screen.DUPLICATES -> DuplicatesScreen(
@@ -268,7 +281,10 @@ fun AthenaApp(
                     onOpenBook = onOpenBook,
                 )
 
-                Screen.NOTES -> NotesScreen(state.notes)
+                Screen.NOTES -> NotesScreen(
+                    notes = state.notes,
+                    onUpdateCollections = viewModel::updateNoteCollections,
+                )
 
                 Screen.SETTINGS -> SettingsScreen(
                     state = state,
@@ -356,28 +372,49 @@ private fun LibraryScreen(
     onImportFiles: () -> Unit,
     onRescan: () -> Unit,
     onOpenBook: (Book) -> Unit,
-    onUpdateMetadata: (Book, String, String?) -> Unit,
+    onUpdateOrganization: (Book, String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
+    onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
 ) {
     var search by rememberSaveable { mutableStateOf("") }
     var fileFilter by rememberSaveable { mutableStateOf(FileFilter.ALL) }
+    var statusFilter by rememberSaveable { mutableStateOf(StatusFilter.ALL) }
+    var collectionFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var sort by rememberSaveable { mutableStateOf(LibrarySort.TITLE.name) }
+    val librarySort = LibrarySort.entries.firstOrNull { it.name == sort } ?: LibrarySort.TITLE
     val normalizedSearch = search.trim()
     val duplicateKinds = remember(state.duplicateGroups) {
         state.duplicateGroups
             .flatMap { group -> group.copies.map { book -> book.id to group.kind } }
             .toMap()
     }
-    val visibleBooks = remember(state.books, normalizedSearch, fileFilter) {
-        state.books.filter { book ->
+    val activeCollections = remember(state.books) {
+        LibraryCollection.entries.filter { collection ->
+            state.books.any { collection.id in it.collections }
+        }
+    }
+    val visibleBooks = remember(
+        state.books,
+        normalizedSearch,
+        fileFilter,
+        statusFilter,
+        collectionFilter,
+        librarySort,
+    ) {
+        val filtered = state.books.filter { book ->
             val matchesSearch = normalizedSearch.isBlank() ||
                 book.title.contains(normalizedSearch, ignoreCase = true) ||
-                book.author.orEmpty().contains(normalizedSearch, ignoreCase = true)
+                book.author.orEmpty().contains(normalizedSearch, ignoreCase = true) ||
+                book.tags.any { it.contains(normalizedSearch, ignoreCase = true) }
             val matchesType = when (fileFilter) {
                 FileFilter.ALL -> true
                 FileFilter.PDF -> book.mimeType == EbookRepository.PDF_MIME
                 FileFilter.EPUB -> book.mimeType == EbookRepository.EPUB_MIME
             }
-            matchesSearch && matchesType
+            val matchesStatus = statusFilter.status == null || book.readingStatus == statusFilter.status
+            val matchesCollection = collectionFilter == null || collectionFilter in book.collections
+            matchesSearch && matchesType && matchesStatus && matchesCollection
         }
+        sortBooks(filtered, librarySort)
     }
 
     LazyColumn(
@@ -392,7 +429,7 @@ private fun LibraryScreen(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "Catalog downloads, check duplicates, then continue reading in Moon+.",
+                "Catalog downloads, organize by collection, then continue reading in Moon+.",
                 modifier = Modifier.padding(top = 4.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -445,7 +482,7 @@ private fun LibraryScreen(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 ),
             ) {
-                Column(Modifier.padding(14.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Text(
                         "Downloads folder on Android 11+",
                         style = MaterialTheme.typography.labelLarge,
@@ -470,19 +507,114 @@ private fun LibraryScreen(
                 value = search,
                 onValueChange = { search = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search title or author") },
+                label = { Text("Search title, author, or tag") },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
             )
         }
 
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Format",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 FileFilter.entries.forEach { filter ->
                     FilterChip(
                         selected = fileFilter == filter,
                         onClick = { fileFilter = filter },
                         label = { Text(filter.label) },
+                    )
+                }
+            }
+        }
+
+        item {
+            Text(
+                "Reading status",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StatusFilter.entries.forEach { filter ->
+                    FilterChip(
+                        selected = statusFilter == filter,
+                        onClick = { statusFilter = filter },
+                        label = { Text(filter.label) },
+                    )
+                }
+            }
+        }
+
+        item {
+            Text(
+                "Collection",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = collectionFilter == null,
+                    onClick = { collectionFilter = null },
+                    label = { Text("All") },
+                )
+            }
+            if (activeCollections.isEmpty()) {
+                Text(
+                    "Collections fill in from ebook metadata after a scan. You can also assign them manually.",
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                activeCollections.chunked(3).forEach { row ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        row.forEach { collection ->
+                            val count = state.books.count { collection.id in it.collections }
+                            FilterChip(
+                                selected = collectionFilter == collection.id,
+                                onClick = {
+                                    collectionFilter =
+                                        if (collectionFilter == collection.id) null else collection.id
+                                },
+                                label = { Text("${collection.label} $count") },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(
+                "Sort",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                LibrarySort.entries.forEach { option ->
+                    FilterChip(
+                        selected = librarySort == option,
+                        onClick = { sort = option.name },
+                        label = { Text(option.label) },
                     )
                 }
             }
@@ -501,7 +633,8 @@ private fun LibraryScreen(
                     book = book,
                     duplicateKind = duplicateKinds[book.id],
                     onOpenBook = onOpenBook,
-                    onUpdateMetadata = onUpdateMetadata,
+                    onUpdateOrganization = onUpdateOrganization,
+                    onUpdateReadingStatus = onUpdateReadingStatus,
                 )
             }
         }
@@ -640,7 +773,8 @@ private fun BookCard(
     book: Book,
     duplicateKind: DuplicateKind?,
     onOpenBook: (Book) -> Unit,
-    onUpdateMetadata: (Book, String, String?) -> Unit,
+    onUpdateOrganization: (Book, String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
+    onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
     Card(
@@ -648,11 +782,11 @@ private fun BookCard(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 BookCover(book)
                 Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         book.title,
                         style = MaterialTheme.typography.titleMedium,
@@ -668,9 +802,9 @@ private fun BookCard(
                     )
                     Text(
                         listOfNotNull(
+                            book.readingStatus.label,
                             formatBytes(book.sizeBytes),
                             book.folderName,
-                            book.displayName,
                         ).joinToString(" · "),
                         modifier = Modifier.padding(top = 5.dp),
                         style = MaterialTheme.typography.labelSmall,
@@ -681,10 +815,33 @@ private fun BookCard(
                 }
             }
 
+            val labels = book.collectionLabels() + book.tags.take(3)
+            if (labels.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    labels.take(4).forEach { label ->
+                        AssistChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    label,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
             if (duplicateKind != null) {
                 AssistChip(
                     onClick = {},
-                    modifier = Modifier.padding(top = 10.dp),
+                    modifier = Modifier.padding(top = 8.dp),
                     label = {
                         Text(
                             if (duplicateKind == DuplicateKind.EXACT) {
@@ -701,6 +858,22 @@ private fun BookCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ReadingStatus.entries.forEach { status ->
+                    FilterChip(
+                        selected = book.readingStatus == status,
+                        onClick = { onUpdateReadingStatus(book, status) },
+                        label = { Text(status.label) },
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
                 horizontalArrangement = Arrangement.End,
             ) {
                 TextButton(onClick = { editing = true }) {
@@ -717,8 +890,8 @@ private fun BookCard(
         EditBookDialog(
             book = book,
             onDismiss = { editing = false },
-            onSave = { title, author ->
-                onUpdateMetadata(book, title, author)
+            onSave = { title, author, tags, collections, status ->
+                onUpdateOrganization(book, title, author, tags, collections, status)
                 editing = false
             },
         )
@@ -729,34 +902,113 @@ private fun BookCard(
 private fun EditBookDialog(
     book: Book,
     onDismiss: () -> Unit,
-    onSave: (String, String?) -> Unit,
+    onSave: (String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
 ) {
     var title by remember(book.id) { mutableStateOf(book.title) }
     var author by remember(book.id) { mutableStateOf(book.author.orEmpty()) }
+    var tagsText by remember(book.id) { mutableStateOf(book.tags.joinToString(", ")) }
+    var selectedCollections by remember(book.id) { mutableStateOf(book.collections.toSet()) }
+    var readingStatus by remember(book.id) { mutableStateOf(book.readingStatus) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit book details") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Title") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = author,
-                    onValueChange = { author = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Author") },
-                    singleLine = true,
-                )
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Title") },
+                        singleLine = true,
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = author,
+                        onValueChange = { author = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Author") },
+                        singleLine = true,
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = tagsText,
+                        onValueChange = { tagsText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Tags (comma separated)") },
+                        supportingText = {
+                            Text("Captured from metadata when available. Manual edits are kept on rescan.")
+                        },
+                    )
+                }
+                item {
+                    Text(
+                        "Reading status",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Row(
+                        modifier = Modifier.padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ReadingStatus.entries.forEach { status ->
+                            FilterChip(
+                                selected = readingStatus == status,
+                                onClick = { readingStatus = status },
+                                label = { Text(status.label) },
+                            )
+                        }
+                    }
+                }
+                item {
+                    Text(
+                        "Collections",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Standard catalogue groups. Manual choices are kept on rescan.",
+                        modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                items(LibraryCollection.entries.chunked(2)) { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { collection ->
+                            FilterChip(
+                                selected = collection.id in selectedCollections,
+                                onClick = {
+                                    selectedCollections = if (collection.id in selectedCollections) {
+                                        selectedCollections - collection.id
+                                    } else {
+                                        selectedCollections + collection.id
+                                    }
+                                },
+                                label = { Text(collection.label) },
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(title, author.ifBlank { null }) },
+                onClick = {
+                    val tags = tagsText.split(',', ';')
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                    onSave(
+                        title,
+                        author.ifBlank { null },
+                        tags,
+                        selectedCollections.toList(),
+                        readingStatus,
+                    )
+                },
                 enabled = title.isNotBlank(),
             ) {
                 Text("Save")
@@ -905,7 +1157,24 @@ private fun DuplicateGroupCard(
 }
 
 @Composable
-private fun NotesScreen(notes: List<CapturedNote>) {
+private fun NotesScreen(
+    notes: List<CapturedNote>,
+    onUpdateCollections: (CapturedNote, List<String>) -> Unit,
+) {
+    var collectionFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingNoteId by remember { mutableStateOf<Long?>(null) }
+    val activeCollections = remember(notes) {
+        LibraryCollection.entries.filter { collection ->
+            notes.any { collection.id in it.collections }
+        }
+    }
+    val visibleNotes = remember(notes, collectionFilter) {
+        notes.filter { note ->
+            collectionFilter == null || collectionFilter in note.collections
+        }
+    }
+    val editingNote = notes.firstOrNull { it.id == editingNoteId }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -918,23 +1187,64 @@ private fun NotesScreen(notes: List<CapturedNote>) {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "In Moon+ Reader, select text and choose Share → Project Athena.",
+                "Share text from Moon+ into Athena, then file notes into standard collections.",
                 modifier = Modifier.padding(top = 4.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        if (notes.isEmpty()) {
+
+        item {
+            Text(
+                "Collection",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = collectionFilter == null,
+                    onClick = { collectionFilter = null },
+                    label = { Text("All") },
+                )
+            }
+            activeCollections.chunked(3).forEach { row ->
+                Row(
+                    modifier = Modifier.padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    row.forEach { collection ->
+                        val count = notes.count { collection.id in it.collections }
+                        FilterChip(
+                            selected = collectionFilter == collection.id,
+                            onClick = {
+                                collectionFilter =
+                                    if (collectionFilter == collection.id) null else collection.id
+                            },
+                            label = { Text("${collection.label} $count") },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (visibleNotes.isEmpty()) {
             item {
                 Card {
-                    Column(Modifier.padding(24.dp)) {
+                    Column(modifier = Modifier.padding(24.dp)) {
                         Text(
-                            "No passages saved yet",
+                            if (notes.isEmpty()) "No passages yet" else "No notes in this collection",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            "Shared text stays in Athena's private on-device database.",
+                            if (notes.isEmpty()) {
+                                "In Moon+, select text and choose Share → Project Athena."
+                            } else {
+                                "Try another collection filter."
+                            },
                             modifier = Modifier.padding(top = 6.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -942,29 +1252,94 @@ private fun NotesScreen(notes: List<CapturedNote>) {
                 }
             }
         } else {
-            items(notes, key = { it.id }) { note ->
+            items(visibleNotes, key = { it.id }) { note ->
                 Card {
-                    Column(Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(note.text, style = MaterialTheme.typography.bodyLarge)
+                        val labels = note.collectionLabels()
+                        if (labels.isNotEmpty()) {
+                            Text(
+                                labels.joinToString(" · "),
+                                modifier = Modifier.padding(top = 10.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
                         Text(
-                            note.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 8,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                        Text(
-                            DateFormat.getDateTimeInstance(
-                                DateFormat.MEDIUM,
-                                DateFormat.SHORT,
-                            ).format(Date(note.createdAt)),
+                            buildString {
+                                append(DateFormat.getDateTimeInstance().format(Date(note.createdAt)))
+                                note.sourcePackage?.let { append(" · "); append(it) }
+                            },
+                            modifier = Modifier.padding(top = 8.dp),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        TextButton(
+                            onClick = { editingNoteId = note.id },
+                            modifier = Modifier.padding(top = 4.dp),
+                        ) {
+                            Text("Collections")
+                        }
                     }
                 }
             }
         }
     }
+
+    if (editingNote != null) {
+        NoteCollectionsDialog(
+            note = editingNote,
+            onDismiss = { editingNoteId = null },
+            onSave = { collections ->
+                onUpdateCollections(editingNote, collections)
+                editingNoteId = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun NoteCollectionsDialog(
+    note: CapturedNote,
+    onDismiss: () -> Unit,
+    onSave: (List<String>) -> Unit,
+) {
+    var selectedCollections by remember(note.id) { mutableStateOf(note.collections.toSet()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Note collections") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(LibraryCollection.entries.chunked(2)) { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { collection ->
+                            FilterChip(
+                                selected = collection.id in selectedCollections,
+                                onClick = {
+                                    selectedCollections = if (collection.id in selectedCollections) {
+                                        selectedCollections - collection.id
+                                    } else {
+                                        selectedCollections + collection.id
+                                    }
+                                },
+                                label = { Text(collection.label) },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(selectedCollections.toList()) }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

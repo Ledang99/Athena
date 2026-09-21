@@ -11,6 +11,7 @@ import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.CatalogStats
 import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.EbookRepository
+import com.projectathena.app.data.ReadingStatus
 import com.projectathena.app.data.ScanProgress
 import com.projectathena.app.data.buildDuplicateGroups
 import java.util.concurrent.atomic.AtomicBoolean
@@ -158,6 +159,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repository.updateMetadata(book.id, title, author)
             }
             loadCatalog(message = "Book details updated")
+        }
+    }
+
+    fun updateOrganization(
+        book: Book,
+        title: String,
+        author: String?,
+        tags: List<String>,
+        collections: List<String>,
+        readingStatus: ReadingStatus,
+    ) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.updateOrganization(
+                    bookId = book.id,
+                    title = title,
+                    author = author,
+                    tags = tags,
+                    collections = collections,
+                    readingStatus = readingStatus,
+                )
+            }
+            loadCatalog(message = "Book organization updated")
+        }
+    }
+
+    fun updateReadingStatus(book: Book, status: ReadingStatus) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.updateReadingStatus(book.id, status)
+            }
+            loadCatalog()
+        }
+    }
+
+    fun updateNoteCollections(note: CapturedNote, collections: List<String>) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.updateNoteCollections(note.id, collections)
+            }
+            loadCatalog(message = "Note collections updated")
         }
     }
 
