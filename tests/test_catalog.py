@@ -117,4 +117,4 @@ def test_android_download_is_a_valid_zip_archive(tmp_path: Path) -> None:
     assert "attachment" in response.headers["content-disposition"]
     with zipfile.ZipFile(BytesIO(response.content)) as archive:
         assert archive.testzip() is None
-        assert archive.namelist() == ["project-athena-v0.1.0-debug.apk"]
+        assert archive.namelist() == ["project-athena-v0.2.0-debug.apk"]
