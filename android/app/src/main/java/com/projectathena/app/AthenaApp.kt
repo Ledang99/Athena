@@ -28,7 +28,11 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -38,7 +42,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -69,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.projectathena.app.data.Book
 import com.projectathena.app.data.CapturedNote
+import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
 import com.projectathena.app.data.ScanProgress
@@ -187,10 +191,8 @@ fun AthenaApp(
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 Screen.entries.forEach { item ->
                     val badgeCount = when (item) {
-                        Screen.LIBRARY -> state.books.size
-                        Screen.DUPLICATES -> state.duplicateKinds.values.count {
-                            it != DuplicateKind.NONE
-                        }
+                        Screen.LIBRARY -> state.catalogStats.total
+                        Screen.DUPLICATES -> state.duplicateGroups.size
                         Screen.NOTES -> state.notes.size
                         Screen.SETTINGS -> 0
                     }
@@ -262,9 +264,8 @@ fun AthenaApp(
                 )
 
                 Screen.DUPLICATES -> DuplicatesScreen(
-                    state = state,
+                    groups = state.duplicateGroups,
                     onOpenBook = onOpenBook,
-                    onUpdateMetadata = viewModel::updateMetadata,
                 )
 
                 Screen.NOTES -> NotesScreen(state.notes)
@@ -360,6 +361,11 @@ private fun LibraryScreen(
     var search by rememberSaveable { mutableStateOf("") }
     var fileFilter by rememberSaveable { mutableStateOf(FileFilter.ALL) }
     val normalizedSearch = search.trim()
+    val duplicateKinds = remember(state.duplicateGroups) {
+        state.duplicateGroups
+            .flatMap { group -> group.copies.map { book -> book.id to group.kind } }
+            .toMap()
+    }
     val visibleBooks = remember(state.books, normalizedSearch, fileFilter) {
         state.books.filter { book ->
             val matchesSearch = normalizedSearch.isBlank() ||
@@ -493,7 +499,7 @@ private fun LibraryScreen(
             items(visibleBooks, key = { it.id }) { book ->
                 BookCard(
                     book = book,
-                    duplicateKind = state.duplicateKinds[book.id] ?: DuplicateKind.NONE,
+                    duplicateKind = duplicateKinds[book.id],
                     onOpenBook = onOpenBook,
                     onUpdateMetadata = onUpdateMetadata,
                 )
@@ -504,15 +510,13 @@ private fun LibraryScreen(
 
 @Composable
 private fun StatsRow(state: AthenaUiState) {
-    val pdfCount = state.books.count { it.mimeType == EbookRepository.PDF_MIME }
-    val epubCount = state.books.count { it.mimeType == EbookRepository.EPUB_MIME }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        StatCard("Books", state.books.size.toString(), Modifier.weight(1f))
-        StatCard("PDF", pdfCount.toString(), Modifier.weight(1f))
-        StatCard("EPUB", epubCount.toString(), Modifier.weight(1f))
+        StatCard("In library", state.catalogStats.total.toString(), Modifier.weight(1f))
+        StatCard("PDF", state.catalogStats.pdf.toString(), Modifier.weight(1f))
+        StatCard("EPUB", state.catalogStats.epub.toString(), Modifier.weight(1f))
     }
 }
 
@@ -634,7 +638,7 @@ private fun BookCover(book: Book) {
 @Composable
 private fun BookCard(
     book: Book,
-    duplicateKind: DuplicateKind,
+    duplicateKind: DuplicateKind?,
     onOpenBook: (Book) -> Unit,
     onUpdateMetadata: (Book, String, String?) -> Unit,
 ) {
@@ -663,7 +667,11 @@ private fun BookCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "${formatBytes(book.sizeBytes)} · ${book.displayName}",
+                        listOfNotNull(
+                            formatBytes(book.sizeBytes),
+                            book.folderName,
+                            book.displayName,
+                        ).joinToString(" · "),
                         modifier = Modifier.padding(top = 5.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -673,7 +681,7 @@ private fun BookCard(
                 }
             }
 
-            if (duplicateKind != DuplicateKind.NONE) {
+            if (duplicateKind != null) {
                 AssistChip(
                     onClick = {},
                     modifier = Modifier.padding(top = 10.dp),
@@ -682,7 +690,7 @@ private fun BookCard(
                             if (duplicateKind == DuplicateKind.EXACT) {
                                 "Exact duplicate"
                             } else {
-                                "Possible alternate edition"
+                                "Likely match"
                             },
                         )
                     },
@@ -764,13 +772,9 @@ private fun EditBookDialog(
 
 @Composable
 private fun DuplicatesScreen(
-    state: AthenaUiState,
+    groups: List<DuplicateGroup>,
     onOpenBook: (Book) -> Unit,
-    onUpdateMetadata: (Book, String, String?) -> Unit,
 ) {
-    val duplicateBooks = state.books.filter {
-        state.duplicateKinds[it.id] != DuplicateKind.NONE
-    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -783,23 +787,23 @@ private fun DuplicatesScreen(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "Athena only reports matches. It never deletes or moves your files.",
+                "Exact copies share the same file hash. Likely matches share title, file size, and type with different hashes.",
                 modifier = Modifier.padding(top = 4.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        if (duplicateBooks.isEmpty()) {
+        if (groups.isEmpty()) {
             item {
                 Card {
-                    Column(Modifier.padding(24.dp)) {
+                    Column(modifier = Modifier.padding(24.dp)) {
                         Text(
                             "No duplicate files found",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            "Scan or import more books and Athena will compare their fingerprints.",
+                            "Athena compares title, size, type, and SHA-256 hashes across your catalog.",
                             modifier = Modifier.padding(top = 6.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -807,13 +811,94 @@ private fun DuplicatesScreen(
                 }
             }
         } else {
-            items(duplicateBooks, key = { it.id }) { book ->
-                BookCard(
-                    book = book,
-                    duplicateKind = state.duplicateKinds[book.id] ?: DuplicateKind.NONE,
-                    onOpenBook = onOpenBook,
-                    onUpdateMetadata = onUpdateMetadata,
+            items(groups, key = { it.key }) { group ->
+                DuplicateGroupCard(group = group, onOpenBook = onOpenBook)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DuplicateGroupCard(
+    group: DuplicateGroup,
+    onOpenBook: (Book) -> Unit,
+) {
+    val formatLabel = if (group.mimeType == EbookRepository.PDF_MIME) "PDF" else "EPUB"
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        group.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "$formatLabel · ${formatBytes(group.sizeBytes)} · ${group.copyCount} copies",
+                        modifier = Modifier.padding(top = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                AssistChip(
+                    onClick = {},
+                    label = {
+                        Text(
+                            if (group.kind == DuplicateKind.EXACT) "Exact hash" else "Likely match",
+                        )
+                    },
                 )
+            }
+
+            group.sha256?.let { hash ->
+                Text(
+                    "Hash: ${hash.take(12)}…",
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+            group.copies.forEachIndexed { index, book ->
+                if (index > 0) {
+                    Spacer(Modifier.height(10.dp))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            book.folderName ?: "Imported file",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            book.displayName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    TextButton(onClick = { onOpenBook(book) }) {
+                        Text("Open")
+                    }
+                }
             }
         }
     }
@@ -882,6 +967,7 @@ private fun NotesScreen(notes: List<CapturedNote>) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsScreen(
     state: AthenaUiState,
@@ -889,9 +975,11 @@ private fun SettingsScreen(
     onRefreshViewers: () -> Unit,
     onToggleTheme: () -> Unit,
 ) {
+    var viewerMenuExpanded by remember { mutableStateOf(false) }
     val preferredLabel = state.availableViewers
         .firstOrNull { it.packageName == state.preferredViewerPackage }
         ?.label
+        ?: "Ask every time"
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -927,20 +1015,45 @@ private fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
 
-                    ViewerOption(
-                        selected = state.preferredViewerPackage == null,
-                        title = "Ask every time",
-                        subtitle = "Show Android's app chooser",
-                        onClick = { onPreferredViewer(null) },
-                    )
-
-                    state.availableViewers.forEach { viewer ->
-                        ViewerOption(
-                            selected = state.preferredViewerPackage == viewer.packageName,
-                            title = viewer.label,
-                            subtitle = viewer.packageName,
-                            onClick = { onPreferredViewer(viewer.packageName) },
+                    ExposedDropdownMenuBox(
+                        expanded = viewerMenuExpanded,
+                        onExpandedChange = { viewerMenuExpanded = it },
+                    ) {
+                        OutlinedTextField(
+                            value = preferredLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier
+                                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                                .fillMaxWidth(),
+                            label = { Text("Viewer") },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(
+                                    expanded = viewerMenuExpanded,
+                                )
+                            },
                         )
+                        ExposedDropdownMenu(
+                            expanded = viewerMenuExpanded,
+                            onDismissRequest = { viewerMenuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Ask every time") },
+                                onClick = {
+                                    onPreferredViewer(null)
+                                    viewerMenuExpanded = false
+                                },
+                            )
+                            state.availableViewers.forEach { viewer ->
+                                DropdownMenuItem(
+                                    text = { Text(viewer.label) },
+                                    onClick = {
+                                        onPreferredViewer(viewer.packageName)
+                                        viewerMenuExpanded = false
+                                    },
+                                )
+                            }
+                        }
                     }
 
                     if (state.availableViewers.isEmpty()) {
@@ -958,13 +1071,6 @@ private fun SettingsScreen(
                     ) {
                         Text("Refresh installed viewers")
                     }
-
-                    Text(
-                        "Current: ${preferredLabel ?: "Ask every time"}",
-                        modifier = Modifier.padding(top = 10.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
                 }
             }
         }
@@ -994,35 +1100,6 @@ private fun SettingsScreen(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ViewerOption(
-    selected: Boolean,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }

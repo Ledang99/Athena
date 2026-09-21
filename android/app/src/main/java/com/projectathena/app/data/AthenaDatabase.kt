@@ -24,6 +24,7 @@ class AthenaDatabase(context: Context) :
                 sha256 TEXT NOT NULL,
                 cover_path TEXT,
                 source_folder TEXT,
+                folder_name TEXT,
                 scan_token TEXT,
                 added_at INTEGER NOT NULL,
                 last_opened_at INTEGER
@@ -49,6 +50,9 @@ class AthenaDatabase(context: Context) :
         if (oldVersion < 2) {
             database.execSQL("ALTER TABLE books ADD COLUMN cover_path TEXT")
         }
+        if (oldVersion < 3) {
+            database.execSQL("ALTER TABLE books ADD COLUMN folder_name TEXT")
+        }
     }
 
     fun upsertBook(book: Book, scanToken: String? = null): Long {
@@ -63,6 +67,7 @@ class AthenaDatabase(context: Context) :
             put("sha256", book.sha256)
             put("cover_path", book.coverPath)
             put("source_folder", book.sourceFolder)
+            put("folder_name", book.folderName)
             put("scan_token", scanToken)
             put("added_at", book.addedAt)
             put("last_opened_at", book.lastOpenedAt)
@@ -174,6 +179,28 @@ class AthenaDatabase(context: Context) :
         }
     }
 
+    fun catalogStats(): CatalogStats {
+        val totals = readableDatabase.rawQuery(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN mime_type = 'application/pdf' THEN 1 ELSE 0 END) AS pdf,
+                SUM(CASE WHEN mime_type IN ('application/epub+zip', 'application/x-epub+zip')
+                    THEN 1 ELSE 0 END) AS epub
+            FROM books
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            cursor.moveToFirst()
+            CatalogStats(
+                total = cursor.getInt(0),
+                pdf = cursor.getInt(1),
+                epub = cursor.getInt(2),
+            )
+        }
+        return totals
+    }
+
     private fun Cursor.toBook() = Book(
         id = long("id"),
         uri = string("uri"),
@@ -186,6 +213,7 @@ class AthenaDatabase(context: Context) :
         sha256 = string("sha256"),
         coverPath = nullableString("cover_path"),
         sourceFolder = nullableString("source_folder"),
+        folderName = nullableString("folder_name"),
         addedAt = long("added_at"),
         lastOpenedAt = nullableLong("last_opened_at"),
     )
@@ -205,6 +233,6 @@ class AthenaDatabase(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "athena.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
     }
 }

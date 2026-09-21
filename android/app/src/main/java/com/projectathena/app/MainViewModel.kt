@@ -8,10 +8,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.projectathena.app.data.Book
 import com.projectathena.app.data.CapturedNote
-import com.projectathena.app.data.DuplicateKind
+import com.projectathena.app.data.CatalogStats
+import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.EbookRepository
 import com.projectathena.app.data.ScanProgress
-import com.projectathena.app.data.duplicateKinds
+import com.projectathena.app.data.buildDuplicateGroups
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,8 @@ import kotlinx.coroutines.withContext
 data class AthenaUiState(
     val books: List<Book> = emptyList(),
     val notes: List<CapturedNote> = emptyList(),
-    val duplicateKinds: Map<Long, DuplicateKind> = emptyMap(),
+    val catalogStats: CatalogStats = CatalogStats(),
+    val duplicateGroups: List<DuplicateGroup> = emptyList(),
     val scanning: Boolean = false,
     val scanProgress: ScanProgress = ScanProgress(),
     val libraryFolder: String? = null,
@@ -181,14 +183,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun loadCatalog(message: String? = null) {
-        val (books, notes) = withContext(Dispatchers.IO) {
-            repository.books() to repository.notes()
+        val snapshot = withContext(Dispatchers.IO) {
+            Triple(repository.books(), repository.notes(), repository.catalogStats())
         }
+        val (books, notes, stats) = snapshot
         _uiState.update {
             it.copy(
                 books = books,
                 notes = notes,
-                duplicateKinds = duplicateKinds(books),
+                catalogStats = stats,
+                duplicateGroups = buildDuplicateGroups(books),
                 scanning = false,
                 scanProgress = ScanProgress(),
                 message = message,

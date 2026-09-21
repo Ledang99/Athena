@@ -14,6 +14,7 @@ data class Book(
     val sha256: String,
     val coverPath: String?,
     val sourceFolder: String?,
+    val folderName: String?,
     val addedAt: Long,
     val lastOpenedAt: Long?,
 )
@@ -25,10 +26,27 @@ data class CapturedNote(
     val createdAt: Long,
 )
 
+data class CatalogStats(
+    val total: Int = 0,
+    val pdf: Int = 0,
+    val epub: Int = 0,
+)
+
 enum class DuplicateKind {
-    NONE,
     EXACT,
-    POSSIBLE,
+    LIKELY,
+}
+
+data class DuplicateGroup(
+    val key: String,
+    val kind: DuplicateKind,
+    val title: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val sha256: String?,
+    val copies: List<Book>,
+) {
+    val copyCount: Int get() = copies.size
 }
 
 fun normalizeForMatch(value: String): String {
@@ -40,27 +58,60 @@ fun normalizeForMatch(value: String): String {
         .trim()
 }
 
-fun Book.identityKey(): String? {
+fun Book.detailKey(): String? {
     val normalizedTitle = normalizeForMatch(title)
-    val normalizedAuthor = normalizeForMatch(author.orEmpty())
-    if (normalizedTitle.isBlank() || normalizedAuthor.isBlank()) return null
-    return "$normalizedTitle|$normalizedAuthor"
+    if (normalizedTitle.isBlank()) return null
+    return "$normalizedTitle|$mimeType|$sizeBytes"
 }
 
-fun duplicateKinds(books: List<Book>): Map<Long, DuplicateKind> {
-    val hashCounts = books.groupingBy { it.sha256 }.eachCount()
-    val possibleKeys = books
-        .mapNotNull { book -> book.identityKey()?.let { key -> key to book.sha256 } }
-        .groupBy({ it.first }, { it.second })
-        .filterValues { hashes -> hashes.distinct().size > 1 }
-        .keys
-
-    return books.associate { book ->
-        val kind = when {
-            (hashCounts[book.sha256] ?: 0) > 1 -> DuplicateKind.EXACT
-            book.identityKey() in possibleKeys -> DuplicateKind.POSSIBLE
-            else -> DuplicateKind.NONE
+fun buildDuplicateGroups(books: List<Book>): List<DuplicateGroup> {
+    val exactGroups = books
+        .groupBy { it.sha256 }
+        .filterValues { it.size > 1 }
+        .map { (hash, copies) ->
+            val sample = copies.first()
+            DuplicateGroup(
+                key = "exact:$hash",
+                kind = DuplicateKind.EXACT,
+                title = sample.title,
+                mimeType = sample.mimeType,
+                sizeBytes = sample.sizeBytes,
+                sha256 = hash,
+                copies = copies.sortedBy { it.folderName.orEmpty() + it.displayName },
+            )
         }
-        book.id to kind
-    }
+
+    val booksInExact = exactGroups.flatMap { group -> group.copies.map { it.id } }.toSet()
+    val likelyGroups = books
+        .filter { it.id !in booksInExact }
+        .mapNotNull { book -> book.detailKey()?.let { key -> key to book } }
+        .groupBy({ it.first }, { it.second })
+        .filterValues { copies ->
+            copies.size > 1 && copies.map { it.sha256 }.distinct().size > 1
+        }
+        .map { (detailKey, copies) ->
+            val sample = copies.first()
+            DuplicateGroup(
+                key = "likely:$detailKey",
+                kind = DuplicateKind.LIKELY,
+                title = sample.title,
+                mimeType = sample.mimeType,
+                sizeBytes = sample.sizeBytes,
+                sha256 = null,
+                copies = copies.sortedBy { it.folderName.orEmpty() + it.displayName },
+            )
+        }
+
+    return (exactGroups + likelyGroups).sortedWith(
+        compareByDescending<DuplicateGroup> { it.copyCount }
+            .thenBy { it.title.lowercase() },
+    )
 }
+
+fun catalogStatsFromBooks(books: List<Book>): CatalogStats = CatalogStats(
+    total = books.size,
+    pdf = books.count { it.mimeType == "application/pdf" },
+    epub = books.count {
+        it.mimeType == "application/epub+zip" || it.mimeType == "application/x-epub+zip"
+    },
+)

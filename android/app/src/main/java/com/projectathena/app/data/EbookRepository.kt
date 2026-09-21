@@ -35,6 +35,8 @@ class EbookRepository(private val context: Context) {
 
     fun notes(): List<CapturedNote> = database.notes()
 
+    fun catalogStats(): CatalogStats = database.catalogStats()
+
     fun captureNote(text: String, sourcePackage: String?) {
         if (text.isNotBlank()) database.addNote(text, sourcePackage)
     }
@@ -171,6 +173,7 @@ class EbookRepository(private val context: Context) {
         val displayName = document.name ?: queryDisplayName(uri) ?: "Untitled ebook"
         val size = document.length().coerceAtLeast(0)
         val modifiedAt = document.lastModified().coerceAtLeast(0)
+        val folderName = document.parentFile?.name
         val existing = database.bookByUri(uri.toString())
 
         if (
@@ -179,7 +182,10 @@ class EbookRepository(private val context: Context) {
             existing.modifiedAt == modifiedAt &&
             existing.coverPath?.let { File(it).isFile } == true
         ) {
-            return existing.copy(sourceFolder = sourceFolder)
+            return existing.copy(
+                sourceFolder = sourceFolder,
+                folderName = folderName ?: existing.folderName,
+            )
         }
 
         val mimeType = mimeType(uri, displayName)
@@ -206,6 +212,7 @@ class EbookRepository(private val context: Context) {
             sha256 = digest,
             coverPath = coverPath,
             sourceFolder = sourceFolder,
+            folderName = folderName,
             addedAt = existing?.addedAt ?: System.currentTimeMillis(),
             lastOpenedAt = existing?.lastOpenedAt,
         )
