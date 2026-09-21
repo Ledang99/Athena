@@ -76,11 +76,9 @@ import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
 import com.projectathena.app.data.LibraryCollection
-import com.projectathena.app.data.LibrarySort
 import com.projectathena.app.data.ReadingStatus
 import com.projectathena.app.data.ScanProgress
 import com.projectathena.app.data.collectionLabels
-import com.projectathena.app.data.sortBooks
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
@@ -92,19 +90,6 @@ private enum class Screen(val label: String, val shortLabel: String) {
     DUPLICATES("Duplicates", "D"),
     NOTES("Notes", "N"),
     SETTINGS("Settings", "S"),
-}
-
-private enum class FileFilter(val label: String) {
-    ALL("All"),
-    PDF("PDF"),
-    EPUB("EPUB"),
-}
-
-private enum class StatusFilter(val label: String, val status: ReadingStatus?) {
-    ALL("All status", null),
-    UNREAD("Unread", ReadingStatus.UNREAD),
-    READING("Reading", ReadingStatus.READING),
-    FINISHED("Finished", ReadingStatus.FINISHED),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,7 +113,7 @@ fun AthenaApp(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            viewModel.scanFolder(uri)
+            viewModel.addFolder(uri)
         }
     }
     val filesLauncher = rememberLauncherForActivityResult(
@@ -151,53 +136,35 @@ fun AthenaApp(
         viewModel.clearMessage()
     }
 
+    val showBrandBar = screen != Screen.LIBRARY
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.primary,
-                                    RoundedCornerShape(12.dp),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "A",
-                                color = Color(0xFFD6F06F),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
-                            )
+            if (showBrandBar) {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
+                    title = {
+                        Text(
+                            when (screen) {
+                                Screen.DUPLICATES -> "Duplicates"
+                                Screen.NOTES -> "Notes"
+                                Screen.SETTINGS -> "Settings"
+                                Screen.LIBRARY -> "Library"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    actions = {
+                        TextButton(onClick = viewModel::toggleTheme) {
+                            Text(if (state.darkMode) "Day" else "Dark")
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Project Athena",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = "ON-DEVICE LIBRARY",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary,
-                                letterSpacing = 0.8.sp,
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    TextButton(onClick = viewModel::toggleTheme) {
-                        Text(if (state.darkMode) "Day mode" else "Dark mode")
-                    }
-                },
-            )
+                    },
+                )
+            }
         },
         bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
@@ -258,9 +225,9 @@ fun AthenaApp(
                 .padding(innerPadding),
         ) {
             when (screen) {
-                Screen.LIBRARY -> LibraryScreen(
+                Screen.LIBRARY -> LibraryShelfScreen(
                     state = state,
-                    onChooseFolder = { folderLauncher.launch(null) },
+                    onAddFolder = { folderLauncher.launch(null) },
                     onImportFiles = {
                         filesLauncher.launch(
                             arrayOf(
@@ -270,10 +237,13 @@ fun AthenaApp(
                             ),
                         )
                     },
-                    onRescan = viewModel::rescan,
+                    onRescanAll = viewModel::rescanAll,
+                    onRemoveFolder = viewModel::removeFolder,
                     onOpenBook = onOpenBook,
                     onUpdateOrganization = viewModel::updateOrganization,
                     onUpdateReadingStatus = viewModel::updateReadingStatus,
+                    onSetViewMode = viewModel::setViewMode,
+                    onToggleTheme = viewModel::toggleTheme,
                 )
 
                 Screen.DUPLICATES -> DuplicatesScreen(
@@ -363,663 +333,6 @@ private fun ScanProgressBanner(
             }
         }
     }
-}
-
-@Composable
-private fun LibraryScreen(
-    state: AthenaUiState,
-    onChooseFolder: () -> Unit,
-    onImportFiles: () -> Unit,
-    onRescan: () -> Unit,
-    onOpenBook: (Book) -> Unit,
-    onUpdateOrganization: (Book, String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
-    onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
-) {
-    var search by rememberSaveable { mutableStateOf("") }
-    var fileFilter by rememberSaveable { mutableStateOf(FileFilter.ALL) }
-    var statusFilter by rememberSaveable { mutableStateOf(StatusFilter.ALL) }
-    var collectionFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var sort by rememberSaveable { mutableStateOf(LibrarySort.TITLE.name) }
-    val librarySort = LibrarySort.entries.firstOrNull { it.name == sort } ?: LibrarySort.TITLE
-    val normalizedSearch = search.trim()
-    val duplicateKinds = remember(state.duplicateGroups) {
-        state.duplicateGroups
-            .flatMap { group -> group.copies.map { book -> book.id to group.kind } }
-            .toMap()
-    }
-    val activeCollections = remember(state.books) {
-        LibraryCollection.entries.filter { collection ->
-            state.books.any { collection.id in it.collections }
-        }
-    }
-    val visibleBooks = remember(
-        state.books,
-        normalizedSearch,
-        fileFilter,
-        statusFilter,
-        collectionFilter,
-        librarySort,
-    ) {
-        val filtered = state.books.filter { book ->
-            val matchesSearch = normalizedSearch.isBlank() ||
-                book.title.contains(normalizedSearch, ignoreCase = true) ||
-                book.author.orEmpty().contains(normalizedSearch, ignoreCase = true) ||
-                book.tags.any { it.contains(normalizedSearch, ignoreCase = true) }
-            val matchesType = when (fileFilter) {
-                FileFilter.ALL -> true
-                FileFilter.PDF -> book.mimeType == EbookRepository.PDF_MIME
-                FileFilter.EPUB -> book.mimeType == EbookRepository.EPUB_MIME
-            }
-            val matchesStatus = statusFilter.status == null || book.readingStatus == statusFilter.status
-            val matchesCollection = collectionFilter == null || collectionFilter in book.collections
-            matchesSearch && matchesType && matchesStatus && matchesCollection
-        }
-        sortBooks(filtered, librarySort)
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            Text(
-                "Your reading inbox",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "Catalog downloads, organize by collection, then continue reading in Moon+.",
-                modifier = Modifier.padding(top = 4.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Button(
-                    onClick = onChooseFolder,
-                    enabled = !state.scanning,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(if (state.libraryFolder == null) "Choose folder" else "Change folder")
-                }
-                OutlinedButton(
-                    onClick = onImportFiles,
-                    enabled = !state.scanning,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Import files")
-                }
-            }
-            if (state.libraryFolder != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        "Folder access granted",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                    TextButton(onClick = onRescan, enabled = !state.scanning) {
-                        Text("Rescan")
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ),
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        "Downloads folder on Android 11+",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "Android blocks access to the Downloads root. Select a subfolder such as Downloads/Athena, or use Import files to select existing downloads.",
-                        modifier = Modifier.padding(top = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                }
-            }
-        }
-
-        item {
-            StatsRow(state)
-        }
-
-        item {
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search title, author, or tag") },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-            )
-        }
-
-        item {
-            Text(
-                "Format",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FileFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = fileFilter == filter,
-                        onClick = { fileFilter = filter },
-                        label = { Text(filter.label) },
-                    )
-                }
-            }
-        }
-
-        item {
-            Text(
-                "Reading status",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StatusFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = statusFilter == filter,
-                        onClick = { statusFilter = filter },
-                        label = { Text(filter.label) },
-                    )
-                }
-            }
-        }
-
-        item {
-            Text(
-                "Collection",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterChip(
-                    selected = collectionFilter == null,
-                    onClick = { collectionFilter = null },
-                    label = { Text("All") },
-                )
-            }
-            if (activeCollections.isEmpty()) {
-                Text(
-                    "Collections fill in from ebook metadata after a scan. You can also assign them manually.",
-                    modifier = Modifier.padding(top = 6.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                activeCollections.chunked(3).forEach { row ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        row.forEach { collection ->
-                            val count = state.books.count { collection.id in it.collections }
-                            FilterChip(
-                                selected = collectionFilter == collection.id,
-                                onClick = {
-                                    collectionFilter =
-                                        if (collectionFilter == collection.id) null else collection.id
-                                },
-                                label = { Text("${collection.label} $count") },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Text(
-                "Sort",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                LibrarySort.entries.forEach { option ->
-                    FilterChip(
-                        selected = librarySort == option,
-                        onClick = { sort = option.name },
-                        label = { Text(option.label) },
-                    )
-                }
-            }
-        }
-
-        if (visibleBooks.isEmpty()) {
-            item {
-                EmptyLibrary(
-                    hasBooks = state.books.isNotEmpty(),
-                    onChooseFolder = onChooseFolder,
-                )
-            }
-        } else {
-            items(visibleBooks, key = { it.id }) { book ->
-                BookCard(
-                    book = book,
-                    duplicateKind = duplicateKinds[book.id],
-                    onOpenBook = onOpenBook,
-                    onUpdateOrganization = onUpdateOrganization,
-                    onUpdateReadingStatus = onUpdateReadingStatus,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatsRow(state: AthenaUiState) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        StatCard("In library", state.catalogStats.total.toString(), Modifier.weight(1f))
-        StatCard("PDF", state.catalogStats.pdf.toString(), Modifier.weight(1f))
-        StatCard("EPUB", state.catalogStats.epub.toString(), Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-    ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Text(
-                value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun EmptyLibrary(hasBooks: Boolean, onChooseFolder: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.Start,
-        ) {
-            Text(
-                if (hasBooks) "No books match" else "Connect your ebook folder",
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                if (hasBooks) {
-                    "Try another title, author, or file format."
-                } else {
-                    "Choose Downloads or another folder. Athena receives read-only access and leaves every file in place."
-                },
-                modifier = Modifier.padding(top = 8.dp),
-                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (!hasBooks) {
-                Button(
-                    onClick = onChooseFolder,
-                    modifier = Modifier.padding(top = 18.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFD6F06F),
-                        contentColor = Color(0xFF12231F),
-                    ),
-                ) {
-                    Text("Choose folder")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun BookCover(book: Book) {
-    val cover by produceState<ImageBitmap?>(
-        initialValue = null,
-        key1 = book.coverPath,
-    ) {
-        value = withContext(Dispatchers.IO) {
-            book.coverPath
-                ?.let(::File)
-                ?.takeIf { it.isFile }
-                ?.let { BitmapFactory.decodeFile(it.absolutePath) }
-                ?.asImageBitmap()
-        }
-    }
-    val shape = RoundedCornerShape(10.dp)
-    if (cover != null) {
-        Image(
-            bitmap = checkNotNull(cover),
-            contentDescription = "Cover of ${book.title}",
-            modifier = Modifier
-                .size(width = 72.dp, height = 96.dp)
-                .clip(shape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentScale = ContentScale.Crop,
-        )
-    } else {
-        Box(
-            modifier = Modifier
-                .size(width = 72.dp, height = 96.dp)
-                .background(
-                    if (book.mimeType == EbookRepository.PDF_MIME) {
-                        MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
-                    } else {
-                        MaterialTheme.colorScheme.primaryContainer
-                    },
-                    shape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                if (book.mimeType == EbookRepository.PDF_MIME) "PDF" else "EPUB",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun BookCard(
-    book: Book,
-    duplicateKind: DuplicateKind?,
-    onOpenBook: (Book) -> Unit,
-    onUpdateOrganization: (Book, String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
-    onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
-) {
-    var editing by remember { mutableStateOf(false) }
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                BookCover(book)
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        book.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        book.author ?: "Unknown author",
-                        modifier = Modifier.padding(top = 3.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        listOfNotNull(
-                            book.readingStatus.label,
-                            formatBytes(book.sizeBytes),
-                            book.folderName,
-                        ).joinToString(" · "),
-                        modifier = Modifier.padding(top = 5.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-
-            val labels = book.collectionLabels() + book.tags.take(3)
-            if (labels.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    labels.take(4).forEach { label ->
-                        AssistChip(
-                            onClick = {},
-                            label = {
-                                Text(
-                                    label,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-
-            if (duplicateKind != null) {
-                AssistChip(
-                    onClick = {},
-                    modifier = Modifier.padding(top = 8.dp),
-                    label = {
-                        Text(
-                            if (duplicateKind == DuplicateKind.EXACT) {
-                                "Exact duplicate"
-                            } else {
-                                "Likely match"
-                            },
-                        )
-                    },
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ReadingStatus.entries.forEach { status ->
-                    FilterChip(
-                        selected = book.readingStatus == status,
-                        onClick = { onUpdateReadingStatus(book, status) },
-                        label = { Text(status.label) },
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                TextButton(onClick = { editing = true }) {
-                    Text("Edit details")
-                }
-                Button(onClick = { onOpenBook(book) }) {
-                    Text("Open")
-                }
-            }
-        }
-    }
-
-    if (editing) {
-        EditBookDialog(
-            book = book,
-            onDismiss = { editing = false },
-            onSave = { title, author, tags, collections, status ->
-                onUpdateOrganization(book, title, author, tags, collections, status)
-                editing = false
-            },
-        )
-    }
-}
-
-@Composable
-private fun EditBookDialog(
-    book: Book,
-    onDismiss: () -> Unit,
-    onSave: (String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
-) {
-    var title by remember(book.id) { mutableStateOf(book.title) }
-    var author by remember(book.id) { mutableStateOf(book.author.orEmpty()) }
-    var tagsText by remember(book.id) { mutableStateOf(book.tags.joinToString(", ")) }
-    var selectedCollections by remember(book.id) { mutableStateOf(book.collections.toSet()) }
-    var readingStatus by remember(book.id) { mutableStateOf(book.readingStatus) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit book details") },
-        text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item {
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = { title = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Title") },
-                        singleLine = true,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        value = author,
-                        onValueChange = { author = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Author") },
-                        singleLine = true,
-                    )
-                }
-                item {
-                    OutlinedTextField(
-                        value = tagsText,
-                        onValueChange = { tagsText = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Tags (comma separated)") },
-                        supportingText = {
-                            Text("Captured from metadata when available. Manual edits are kept on rescan.")
-                        },
-                    )
-                }
-                item {
-                    Text(
-                        "Reading status",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Row(
-                        modifier = Modifier.padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        ReadingStatus.entries.forEach { status ->
-                            FilterChip(
-                                selected = readingStatus == status,
-                                onClick = { readingStatus = status },
-                                label = { Text(status.label) },
-                            )
-                        }
-                    }
-                }
-                item {
-                    Text(
-                        "Collections",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "Standard catalogue groups. Manual choices are kept on rescan.",
-                        modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                items(LibraryCollection.entries.chunked(2)) { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { collection ->
-                            FilterChip(
-                                selected = collection.id in selectedCollections,
-                                onClick = {
-                                    selectedCollections = if (collection.id in selectedCollections) {
-                                        selectedCollections - collection.id
-                                    } else {
-                                        selectedCollections + collection.id
-                                    }
-                                },
-                                label = { Text(collection.label) },
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val tags = tagsText.split(',', ';')
-                        .map { it.trim() }
-                        .filter { it.isNotBlank() }
-                    onSave(
-                        title,
-                        author.ifBlank { null },
-                        tags,
-                        selectedCollections.toList(),
-                        readingStatus,
-                    )
-                },
-                enabled = title.isNotBlank(),
-            ) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
-    )
 }
 
 @Composable

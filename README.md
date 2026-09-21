@@ -70,20 +70,19 @@ No file operation is performed from either report.
 The native app in [`android/`](android/) is the phone-first reading inbox:
 
 Download the current test build:
-[`project-athena-v0.5.0-debug.zip`](releases/project-athena-v0.5.0-debug.zip)
+[`project-athena-v0.6.0-debug.zip`](releases/project-athena-v0.6.0-debug.zip)
 
-- Select a Downloads or ebook folder with Android's system folder picker
-- Scan PDF and EPUB files without broad storage permissions
-- Search locally by title, author, or tag
+- Moon+-style reading shelf with a compact top bar and cover tiles by default
+- Switch between **Tiles** and **Details** views
+- Multi-folder libraries (add, remove, rescan all)
+- Section menu: All Books, Unread / Reading / Finished, folders, collections
+- Search, filter, and sort from the top liner
 - Capture category tags from ebook metadata, with manual edits that survive rescan
 - Organize books and notes into standard collections (Habits, Investing, and more)
-- Track reading status (Unread / Reading / Finished) and sort by recently opened
-- Show library totals from the catalog database (all indexed PDF and EPUB files)
-- Detect exact copies (SHA-256) and likely matches (title + size + type)
-- Show duplicate copy counts and the folder each copy lives in
-- Choose a preferred ebook viewer from a Settings dropdown
-- Edit incorrect title or author metadata
-- Open an ebook in Moon+ Reader or your preferred viewer
+- Track reading status and sort by recently opened
+- Detect exact copies and likely matches with folder locations
+- Choose a preferred ebook viewer from Settings
+- Open ebooks in Moon+ Reader or your preferred viewer
 - Save selected Moon+ passages through **Share → Project Athena**
 
 The catalog and captured passages stay in the app's private SQLite database.
