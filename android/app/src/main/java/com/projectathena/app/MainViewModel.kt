@@ -2,14 +2,15 @@ package com.projectathena.app
 
 import android.app.Application
 import android.net.Uri
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.projectathena.app.data.Book
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
+import com.projectathena.app.data.ScanProgress
 import com.projectathena.app.data.duplicateKinds
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
@@ -25,9 +26,11 @@ data class AthenaUiState(
     val notes: List<CapturedNote> = emptyList(),
     val duplicateKinds: Map<Long, DuplicateKind> = emptyMap(),
     val scanning: Boolean = false,
-    val scannedCount: Int = 0,
+    val scanProgress: ScanProgress = ScanProgress(),
     val libraryFolder: String? = null,
     val darkMode: Boolean = false,
+    val preferredViewerPackage: String? = null,
+    val availableViewers: List<ViewerApp> = emptyList(),
     val message: String? = null,
 )
 
@@ -39,6 +42,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AthenaUiState(
             libraryFolder = preferences.getString(LIBRARY_FOLDER, null),
             darkMode = preferences.getBoolean(DARK_MODE, false),
+            preferredViewerPackage = preferences.getString(PREFERRED_VIEWER, null),
+            availableViewers = application.packageManager.installedEbookViewers(),
         ),
     )
     val uiState: StateFlow<AthenaUiState> = _uiState.asStateFlow()
@@ -47,17 +52,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
+    fun refreshViewers() {
+        _uiState.update {
+            it.copy(availableViewers = getApplication<Application>().packageManager.installedEbookViewers())
+        }
+    }
+
+    fun setPreferredViewer(packageName: String?) {
+        preferences.edit {
+            if (packageName.isNullOrBlank()) {
+                remove(PREFERRED_VIEWER)
+            } else {
+                putString(PREFERRED_VIEWER, packageName)
+            }
+        }
+        _uiState.update { it.copy(preferredViewerPackage = packageName) }
+    }
+
     fun scanFolder(uri: Uri) {
         if (!operationActive.compareAndSet(false, true)) return
         preferences.edit { putString(LIBRARY_FOLDER, uri.toString()) }
         _uiState.update {
-            it.copy(scanning = true, scannedCount = 0, libraryFolder = uri.toString())
+            it.copy(
+                scanning = true,
+                scanProgress = ScanProgress(phase = "Preparing"),
+                libraryFolder = uri.toString(),
+            )
         }
         viewModelScope.launch {
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
-                    repository.scanFolder(uri) { count ->
-                        _uiState.update { state -> state.copy(scannedCount = count) }
+                    repository.scanFolder(uri) { progress ->
+                        _uiState.update { state ->
+                            state.copy(scanning = true, scanProgress = progress)
+                        }
                     }
                 }
             }
@@ -83,10 +111,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importFiles(uris: List<Uri>) {
         if (uris.isEmpty() || !operationActive.compareAndSet(false, true)) return
-        _uiState.update { it.copy(scanning = true, scannedCount = 0) }
+        _uiState.update {
+            it.copy(
+                scanning = true,
+                scanProgress = ScanProgress(phase = "Preparing import", total = uris.size),
+            )
+        }
         viewModelScope.launch {
             val outcome = runCatching {
-                withContext(Dispatchers.IO) { repository.importFiles(uris) }
+                withContext(Dispatchers.IO) {
+                    repository.importFiles(uris) { progress ->
+                        _uiState.update { state ->
+                            state.copy(scanning = true, scanProgress = progress)
+                        }
+                    }
+                }
             }
             operationActive.set(false)
             outcome.fold(
@@ -151,7 +190,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 notes = notes,
                 duplicateKinds = duplicateKinds(books),
                 scanning = false,
-                scannedCount = 0,
+                scanProgress = ScanProgress(),
                 message = message,
             )
         }
@@ -161,5 +200,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFERENCES = "athena_preferences"
         private const val LIBRARY_FOLDER = "library_folder"
         private const val DARK_MODE = "dark_mode"
+        private const val PREFERRED_VIEWER = "preferred_viewer_package"
     }
 }

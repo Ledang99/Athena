@@ -7,13 +7,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -39,6 +38,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -71,8 +71,9 @@ import com.projectathena.app.data.Book
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
-import java.text.DateFormat
+import com.projectathena.app.data.ScanProgress
 import java.io.File
+import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -81,6 +82,7 @@ private enum class Screen(val label: String, val shortLabel: String) {
     LIBRARY("Library", "L"),
     DUPLICATES("Duplicates", "D"),
     NOTES("Notes", "N"),
+    SETTINGS("Settings", "S"),
 }
 
 private enum class FileFilter(val label: String) {
@@ -190,6 +192,7 @@ fun AthenaApp(
                             it != DuplicateKind.NONE
                         }
                         Screen.NOTES -> state.notes.size
+                        Screen.SETTINGS -> 0
                     }
                     NavigationBarItem(
                         selected = screen == item,
@@ -265,27 +268,81 @@ fun AthenaApp(
                 )
 
                 Screen.NOTES -> NotesScreen(state.notes)
+
+                Screen.SETTINGS -> SettingsScreen(
+                    state = state,
+                    onPreferredViewer = viewModel::setPreferredViewer,
+                    onRefreshViewers = viewModel::refreshViewers,
+                    onToggleTheme = viewModel::toggleTheme,
+                )
             }
 
             if (state.scanning) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.primaryContainer)
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                ) {
-                    Text(
-                        if (state.scannedCount > 0) {
-                            "Scanning… ${state.scannedCount} ebooks indexed"
-                        } else {
-                            "Preparing your library…"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
+                ScanProgressBanner(
+                    progress = state.scanProgress,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanProgressBanner(
+    progress: ScanProgress,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text(
+                progress.phase,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            if (progress.total > 0) {
+                Text(
+                    "${progress.current} of ${progress.total}",
+                    modifier = Modifier.padding(top = 2.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            if (progress.isDeterminate) {
+                LinearProgressIndicator(
+                    progress = { progress.fraction },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            progress.currentFolder?.let { folder ->
+                Text(
+                    "Folder: $folder",
+                    modifier = Modifier.padding(top = 10.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            progress.currentFile?.let { file ->
+                Text(
+                    "Ebook: $file",
+                    modifier = Modifier.padding(top = 2.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -642,7 +699,7 @@ private fun BookCard(
                     Text("Edit details")
                 }
                 Button(onClick = { onOpenBook(book) }) {
-                    Text("Read in Moon+")
+                    Text("Open")
                 }
             }
         }
@@ -821,6 +878,151 @@ private fun NotesScreen(notes: List<CapturedNote>) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    state: AthenaUiState,
+    onPreferredViewer: (String?) -> Unit,
+    onRefreshViewers: () -> Unit,
+    onToggleTheme: () -> Unit,
+) {
+    val preferredLabel = state.availableViewers
+        .firstOrNull { it.packageName == state.preferredViewerPackage }
+        ?.label
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text(
+                "Settings",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Choose how Athena opens ebooks and how the app looks.",
+                modifier = Modifier.padding(top = 4.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Preferred ebook viewer",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Athena opens PDF and EPUB files with the app you choose here.",
+                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    ViewerOption(
+                        selected = state.preferredViewerPackage == null,
+                        title = "Ask every time",
+                        subtitle = "Show Android's app chooser",
+                        onClick = { onPreferredViewer(null) },
+                    )
+
+                    state.availableViewers.forEach { viewer ->
+                        ViewerOption(
+                            selected = state.preferredViewerPackage == viewer.packageName,
+                            title = viewer.label,
+                            subtitle = viewer.packageName,
+                            onClick = { onPreferredViewer(viewer.packageName) },
+                        )
+                    }
+
+                    if (state.availableViewers.isEmpty()) {
+                        Text(
+                            "No ebook viewers were found. Install a reader such as Moon+ Reader, then refresh.",
+                            modifier = Modifier.padding(top = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onRefreshViewers,
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        Text("Refresh installed viewers")
+                    }
+
+                    Text(
+                        "Current: ${preferredLabel ?: "Ask every time"}",
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
+            }
+        }
+
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Appearance",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (state.darkMode) "Dark mode is on" else "Day mode is on",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Button(onClick = onToggleTheme) {
+                            Text(if (state.darkMode) "Use day mode" else "Use dark mode")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewerOption(
+    selected: Boolean,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

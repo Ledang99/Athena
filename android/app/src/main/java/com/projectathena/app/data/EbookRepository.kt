@@ -45,57 +45,123 @@ class EbookRepository(private val context: Context) {
 
     fun markOpened(bookId: Long) = database.markOpened(bookId)
 
-    fun scanFolder(treeUri: Uri, onProgress: (Int) -> Unit = {}): ScanResult {
+    fun scanFolder(
+        treeUri: Uri,
+        onProgress: (ScanProgress) -> Unit = {},
+    ): ScanResult {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: return ScanResult(0, 1, "The selected folder is unavailable")
-        val token = UUID.randomUUID().toString()
-        var indexed = 0
-        var errors = 0
+        val rootName = root.name ?: "Library folder"
+        onProgress(
+            ScanProgress(
+                phase = "Discovering ebooks",
+                currentFolder = rootName,
+            ),
+        )
+
+        val discovered = mutableListOf<DocumentFile>()
         val pending = ArrayDeque<DocumentFile>()
         pending.add(root)
+        var discoveryErrors = 0
 
         while (pending.isNotEmpty()) {
             val current = pending.removeFirst()
             val children = runCatching { current.listFiles() }.getOrElse {
-                errors += 1
+                discoveryErrors += 1
                 emptyArray()
             }
             children.forEach { document ->
                 when {
                     document.isDirectory -> pending.add(document)
-                    document.isFile && document.isSupportedEbook() -> {
-                        runCatching {
-                            val book = readBook(document, treeUri.toString())
-                            database.upsertBook(book, token)
-                        }.onSuccess {
-                            indexed += 1
-                            onProgress(indexed)
-                        }.onFailure {
-                            errors += 1
-                        }
-                    }
+                    document.isFile && document.isSupportedEbook() -> discovered += document
                 }
             }
+            onProgress(
+                ScanProgress(
+                    phase = "Discovering ebooks",
+                    current = discovered.size,
+                    currentFolder = current.name ?: rootName,
+                ),
+            )
+        }
+
+        val token = UUID.randomUUID().toString()
+        var indexed = 0
+        var errors = discoveryErrors
+        val total = discovered.size
+
+        discovered.forEachIndexed { index, document ->
+            val fileName = document.name ?: "ebook"
+            val parentName = document.parentFile?.name ?: rootName
+            onProgress(
+                ScanProgress(
+                    phase = "Indexing ebooks",
+                    current = index,
+                    total = total,
+                    currentFile = fileName,
+                    currentFolder = parentName,
+                ),
+            )
+            runCatching {
+                val book = readBook(document, treeUri.toString())
+                database.upsertBook(book, token)
+            }.onSuccess {
+                indexed += 1
+            }.onFailure {
+                errors += 1
+            }
+            onProgress(
+                ScanProgress(
+                    phase = "Indexing ebooks",
+                    current = index + 1,
+                    total = total,
+                    currentFile = fileName,
+                    currentFolder = parentName,
+                ),
+            )
         }
 
         database.removeMissingFromFolder(treeUri.toString(), token)
         return ScanResult(indexed, errors)
     }
 
-    fun importFiles(uris: List<Uri>): ScanResult {
+    fun importFiles(
+        uris: List<Uri>,
+        onProgress: (ScanProgress) -> Unit = {},
+    ): ScanResult {
+        val unique = uris.distinct()
         var indexed = 0
         var errors = 0
-        uris.distinct().forEach { uri ->
+        unique.forEachIndexed { index, uri ->
+            val document = DocumentFile.fromSingleUri(context, uri)
+            val fileName = document?.name ?: queryDisplayName(uri) ?: "ebook"
+            onProgress(
+                ScanProgress(
+                    phase = "Importing ebooks",
+                    current = index,
+                    total = unique.size,
+                    currentFile = fileName,
+                    currentFolder = "Selected files",
+                ),
+            )
             runCatching {
-                val document = DocumentFile.fromSingleUri(context, uri)
-                    ?: error("File is unavailable")
-                require(document.isSupportedEbook()) { "Unsupported file type" }
-                database.upsertBook(readBook(document, sourceFolder = null))
+                val file = document ?: error("File is unavailable")
+                require(file.isSupportedEbook()) { "Unsupported file type" }
+                database.upsertBook(readBook(file, sourceFolder = null))
             }.onSuccess {
                 indexed += 1
             }.onFailure {
                 errors += 1
             }
+            onProgress(
+                ScanProgress(
+                    phase = "Importing ebooks",
+                    current = index + 1,
+                    total = unique.size,
+                    currentFile = fileName,
+                    currentFolder = "Selected files",
+                ),
+            )
         }
         return ScanResult(indexed, errors)
     }

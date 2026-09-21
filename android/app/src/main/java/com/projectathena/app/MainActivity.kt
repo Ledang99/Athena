@@ -31,6 +31,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshViewers()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -51,20 +56,19 @@ class MainActivity : ComponentActivity() {
             setDataAndType(uri, book.mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val preferredPackage = MOON_PACKAGES.firstOrNull { packageName ->
-            packageManager.getLaunchIntentForPackage(packageName) != null
-        }
+        val preferred = viewModel.uiState.value.preferredViewerPackage
+            ?.takeIf { packageName ->
+                packageManager.getLaunchIntentForPackage(packageName) != null
+            }
 
         val opened = runCatching {
-            startActivity(
-                if (preferredPackage != null) {
-                    Intent(baseIntent).setPackage(preferredPackage)
-                } else {
-                    Intent.createChooser(baseIntent, "Read with Moon+ Reader")
-                },
-            )
+            if (preferred != null) {
+                startActivity(Intent(baseIntent).setPackage(preferred))
+            } else {
+                startActivity(Intent.createChooser(baseIntent, "Open with"))
+            }
         }.recoverCatching {
-            startActivity(Intent.createChooser(baseIntent, "Open ebook"))
+            startActivity(Intent.createChooser(baseIntent, "Open with"))
         }.isSuccess
 
         if (opened) {
@@ -76,12 +80,5 @@ class MainActivity : ComponentActivity() {
 
     private fun Context.showToast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    }
-
-    companion object {
-        private val MOON_PACKAGES = listOf(
-            "com.flyersoft.moonreaderp",
-            "com.flyersoft.moonreader",
-        )
     }
 }
