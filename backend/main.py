@@ -45,7 +45,7 @@ def create_app(database_path: Path | str | None = None) -> FastAPI:
         archive_path = (
             Path(__file__).resolve().parent.parent
             / "releases"
-            / "project-athena-v0.2.0-debug.zip"
+            / "project-athena-v0.3.0-debug.zip"
         )
         if not archive_path.exists():
             raise HTTPException(status_code=404, detail="Android build is unavailable")
@@ -53,7 +53,7 @@ def create_app(database_path: Path | str | None = None) -> FastAPI:
         return FileResponse(
             archive_path,
             media_type="application/zip",
-            filename="project-athena-android-v0.2.0.zip",
+            filename="project-athena-android-v0.3.0.zip",
         )
 
     @app.get("/api/folders")
