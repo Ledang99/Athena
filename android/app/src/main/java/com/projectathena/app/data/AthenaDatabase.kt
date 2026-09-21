@@ -22,6 +22,7 @@ class AthenaDatabase(context: Context) :
                 size_bytes INTEGER NOT NULL,
                 modified_at INTEGER NOT NULL,
                 sha256 TEXT NOT NULL,
+                cover_path TEXT,
                 source_folder TEXT,
                 scan_token TEXT,
                 added_at INTEGER NOT NULL,
@@ -44,7 +45,11 @@ class AthenaDatabase(context: Context) :
         )
     }
 
-    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            database.execSQL("ALTER TABLE books ADD COLUMN cover_path TEXT")
+        }
+    }
 
     fun upsertBook(book: Book, scanToken: String? = null): Long {
         val values = ContentValues().apply {
@@ -56,6 +61,7 @@ class AthenaDatabase(context: Context) :
             put("size_bytes", book.sizeBytes)
             put("modified_at", book.modifiedAt)
             put("sha256", book.sha256)
+            put("cover_path", book.coverPath)
             put("source_folder", book.sourceFolder)
             put("scan_token", scanToken)
             put("added_at", book.addedAt)
@@ -178,6 +184,7 @@ class AthenaDatabase(context: Context) :
         sizeBytes = long("size_bytes"),
         modifiedAt = long("modified_at"),
         sha256 = string("sha256"),
+        coverPath = nullableString("cover_path"),
         sourceFolder = nullableString("source_folder"),
         addedAt = long("added_at"),
         lastOpenedAt = nullableLong("last_opened_at"),
@@ -198,6 +205,6 @@ class AthenaDatabase(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "athena.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
     }
 }

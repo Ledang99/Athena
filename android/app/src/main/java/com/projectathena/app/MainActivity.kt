@@ -8,7 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.projectathena.app.data.Book
 
 class MainActivity : ComponentActivity() {
@@ -19,7 +21,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         handleSharedText(intent)
         setContent {
-            AthenaTheme {
+            val state by viewModel.uiState.collectAsStateWithLifecycle()
+            AthenaTheme(darkTheme = state.darkMode) {
                 AthenaApp(
                     viewModel = viewModel,
                     onOpenBook = ::openBook,

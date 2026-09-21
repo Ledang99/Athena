@@ -60,6 +60,7 @@ class DuplicateDetectionTest {
         sizeBytes = 100,
         modifiedAt = 1,
         sha256 = hash,
+        coverPath = null,
         sourceFolder = null,
         addedAt = 1,
         lastOpenedAt = null,

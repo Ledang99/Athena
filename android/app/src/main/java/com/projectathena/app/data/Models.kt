@@ -12,6 +12,7 @@ data class Book(
     val sizeBytes: Long,
     val modifiedAt: Long,
     val sha256: String,
+    val coverPath: String?,
     val sourceFolder: String?,
     val addedAt: Long,
     val lastOpenedAt: Long?,

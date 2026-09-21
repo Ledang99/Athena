@@ -2,11 +2,18 @@ package com.projectathena.app.data
 
 import android.content.ContentResolver
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import java.io.File
+import java.io.FileOutputStream
 import java.io.StringReader
 import java.security.MessageDigest
 import java.util.UUID
@@ -101,16 +108,23 @@ class EbookRepository(private val context: Context) {
         if (
             existing != null &&
             existing.sizeBytes == size &&
-            existing.modifiedAt == modifiedAt
+            existing.modifiedAt == modifiedAt &&
+            existing.coverPath?.let { File(it).isFile } == true
         ) {
             return existing.copy(sourceFolder = sourceFolder)
         }
 
         val mimeType = mimeType(uri, displayName)
+        val digest = sha256(uri)
         val metadata = when (mimeType) {
             PDF_MIME -> readPdfMetadata(uri)
             EPUB_MIME -> readEpubMetadata(uri)
             else -> EbookMetadata()
+        }
+        val coverPath = when (mimeType) {
+            PDF_MIME -> extractPdfCover(uri, digest)
+            EPUB_MIME -> extractEpubCover(uri, metadata.coverEntry, digest)
+            else -> null
         }
         val fallback = filenameMetadata(displayName)
         return Book(
@@ -121,7 +135,8 @@ class EbookRepository(private val context: Context) {
             mimeType = mimeType,
             sizeBytes = size,
             modifiedAt = modifiedAt,
-            sha256 = sha256(uri),
+            sha256 = digest,
+            coverPath = coverPath,
             sourceFolder = sourceFolder,
             addedAt = existing?.addedAt ?: System.currentTimeMillis(),
             lastOpenedAt = existing?.lastOpenedAt,
@@ -145,7 +160,10 @@ class EbookRepository(private val context: Context) {
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (!entry.isDirectory && entry.name.endsWith(".opf", ignoreCase = true)) {
-                        return@zipUse parseOpf(readLimited(zip, 2 * 1024 * 1024))
+                        return@zipUse parseOpf(
+                            bytes = readLimited(zip, 2 * 1024 * 1024),
+                            opfEntry = entry.name,
+                        )
                     }
                 }
                 EbookMetadata()
@@ -153,22 +171,166 @@ class EbookRepository(private val context: Context) {
         } ?: EbookMetadata()
     }.getOrDefault(EbookMetadata())
 
-    private fun parseOpf(bytes: ByteArray): EbookMetadata {
+    private fun parseOpf(bytes: ByteArray, opfEntry: String): EbookMetadata {
         val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
             setInput(StringReader(bytes.toString(Charsets.UTF_8)))
         }
         var title: String? = null
         var author: String? = null
+        var coverId: String? = null
+        val images = mutableListOf<ManifestImage>()
         while (parser.eventType != XmlPullParser.END_DOCUMENT) {
             if (parser.eventType == XmlPullParser.START_TAG) {
                 when (parser.name.substringAfter(':').lowercase()) {
                     "title" -> if (title == null) title = runCatching { parser.nextText() }.getOrNull()
                     "creator" -> if (author == null) author = runCatching { parser.nextText() }.getOrNull()
+                    "meta" -> {
+                        if (parser.attribute("name").equals("cover", ignoreCase = true)) {
+                            coverId = parser.attribute("content")
+                        }
+                    }
+                    "item" -> {
+                        val mediaType = parser.attribute("media-type").orEmpty()
+                        if (mediaType.startsWith("image/")) {
+                            images += ManifestImage(
+                                id = parser.attribute("id").orEmpty(),
+                                href = parser.attribute("href").orEmpty(),
+                                properties = parser.attribute("properties").orEmpty(),
+                            )
+                        }
+                    }
                 }
             }
             parser.next()
         }
-        return EbookMetadata(title?.trim(), author?.trim())
+        val coverImage = images.firstOrNull {
+            "cover-image" in it.properties.split(Regex("\\s+"))
+        } ?: images.firstOrNull {
+            coverId != null && it.id == coverId
+        } ?: images.firstOrNull {
+            "cover" in it.id.lowercase() || "cover" in it.href.lowercase()
+        } ?: images.firstOrNull()
+        return EbookMetadata(
+            title = title?.trim(),
+            author = author?.trim(),
+            coverEntry = coverImage?.href
+                ?.takeIf { it.isNotBlank() }
+                ?.let { resolveZipEntry(opfEntry, it) },
+        )
+    }
+
+    private fun XmlPullParser.attribute(name: String): String? {
+        for (index in 0 until attributeCount) {
+            if (getAttributeName(index).substringAfter(':').equals(name, ignoreCase = true)) {
+                return getAttributeValue(index)
+            }
+        }
+        return null
+    }
+
+    private fun resolveZipEntry(opfEntry: String, href: String): String {
+        val base = opfEntry.substringBeforeLast('/', "")
+        val combined = listOf(base, href.substringBefore('#'))
+            .filter { it.isNotBlank() }
+            .joinToString("/")
+        val parts = ArrayDeque<String>()
+        combined.split('/').forEach { part ->
+            when (part) {
+                "", "." -> Unit
+                ".." -> if (parts.isNotEmpty()) parts.removeLast()
+                else -> parts.add(Uri.decode(part))
+            }
+        }
+        return parts.joinToString("/")
+    }
+
+    private fun extractPdfCover(uri: Uri, digest: String): String? = runCatching {
+        val destination = coverFile(digest)
+        if (destination.isFile) return@runCatching destination.absolutePath
+        resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+            PdfRenderer(descriptor).use { renderer ->
+                if (renderer.pageCount > 0) {
+                    renderer.openPage(0).use { page ->
+                        val width = COVER_WIDTH
+                        val height = (width * page.height.toFloat() / page.width)
+                            .toInt()
+                            .coerceIn(COVER_WIDTH, COVER_MAX_HEIGHT)
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        bitmap.eraseColor(Color.WHITE)
+                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        saveCover(bitmap, destination)
+                        bitmap.recycle()
+                    }
+                }
+            }
+        }
+        destination.takeIf { it.isFile }?.absolutePath
+    }.getOrNull()
+
+    private fun extractEpubCover(
+        uri: Uri,
+        coverEntry: String?,
+        digest: String,
+    ): String? = runCatching {
+        if (coverEntry == null) return@runCatching null
+        val destination = coverFile(digest)
+        if (destination.isFile) return@runCatching destination.absolutePath
+        resolver.openInputStream(uri)?.use { input ->
+            ZipInputStream(input).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (!entry.isDirectory && Uri.decode(entry.name) == coverEntry) {
+                        val bytes = readLimited(zip, 10 * 1024 * 1024)
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { decoded ->
+                            val thumbnail = scaleCover(decoded)
+                            saveCover(thumbnail, destination)
+                            if (thumbnail !== decoded) thumbnail.recycle()
+                            decoded.recycle()
+                        }
+                        break
+                    }
+                }
+            }
+        }
+        destination.takeIf { it.isFile }?.absolutePath
+    }.getOrNull()
+
+    private fun coverFile(digest: String): File {
+        val directory = File(context.filesDir, "covers").apply { mkdirs() }
+        return File(directory, "$digest.jpg")
+    }
+
+    private fun scaleCover(source: Bitmap): Bitmap {
+        val scale = minOf(
+            1f,
+            COVER_WIDTH.toFloat() / source.width.coerceAtLeast(1),
+            COVER_MAX_HEIGHT.toFloat() / source.height.coerceAtLeast(1),
+        )
+        if (scale >= 1f) return source
+        return Bitmap.createScaledBitmap(
+            source,
+            (source.width * scale).toInt().coerceAtLeast(1),
+            (source.height * scale).toInt().coerceAtLeast(1),
+            true,
+        )
+    }
+
+    private fun saveCover(source: Bitmap, destination: File) {
+        val flattened = Bitmap.createBitmap(
+            source.width,
+            source.height,
+            Bitmap.Config.ARGB_8888,
+        )
+        Canvas(flattened).apply {
+            drawColor(Color.WHITE)
+            drawBitmap(source, 0f, 0f, null)
+        }
+        FileOutputStream(destination).use { output ->
+            check(flattened.compress(Bitmap.CompressFormat.JPEG, 84, output)) {
+                "Unable to save cover"
+            }
+        }
+        flattened.recycle()
     }
 
     private fun readLimited(zip: ZipInputStream, maximumBytes: Int): ByteArray {
@@ -244,11 +406,20 @@ class EbookRepository(private val context: Context) {
     private data class EbookMetadata(
         val title: String? = null,
         val author: String? = null,
+        val coverEntry: String? = null,
+    )
+
+    private data class ManifestImage(
+        val id: String,
+        val href: String,
+        val properties: String,
     )
 
     companion object {
         const val PDF_MIME = "application/pdf"
         const val EPUB_MIME = "application/epub+zip"
+        private const val COVER_WIDTH = 360
+        private const val COVER_MAX_HEIGHT = 540
         private val EPUB_MIME_ALIASES = setOf(
             EPUB_MIME,
             "application/x-epub+zip",

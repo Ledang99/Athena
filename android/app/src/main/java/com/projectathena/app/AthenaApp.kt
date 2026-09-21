@@ -1,9 +1,11 @@
 package com.projectathena.app
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -47,12 +50,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,7 +72,10 @@ import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
 import java.text.DateFormat
+import java.io.File
 import java.util.Date
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private enum class Screen(val label: String, val shortLabel: String) {
     LIBRARY("Library", "L"),
@@ -161,6 +172,11 @@ fun AthenaApp(
                                 letterSpacing = 0.8.sp,
                             )
                         }
+                    }
+                },
+                actions = {
+                    TextButton(onClick = viewModel::toggleTheme) {
+                        Text(if (state.darkMode) "Day mode" else "Dark mode")
                     }
                 },
             )
@@ -361,6 +377,28 @@ private fun LibraryScreen(
         }
 
         item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        "Downloads folder on Android 11+",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Android blocks access to the Downloads root. Select a subfolder such as Downloads/Athena, or use Import files to select existing downloads.",
+                        modifier = Modifier.padding(top = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            }
+        }
+
+        item {
             StatsRow(state)
         }
 
@@ -488,6 +526,55 @@ private fun EmptyLibrary(hasBooks: Boolean, onChooseFolder: () -> Unit) {
 }
 
 @Composable
+private fun BookCover(book: Book) {
+    val cover by produceState<ImageBitmap?>(
+        initialValue = null,
+        key1 = book.coverPath,
+    ) {
+        value = withContext(Dispatchers.IO) {
+            book.coverPath
+                ?.let(::File)
+                ?.takeIf { it.isFile }
+                ?.let { BitmapFactory.decodeFile(it.absolutePath) }
+                ?.asImageBitmap()
+        }
+    }
+    val shape = RoundedCornerShape(10.dp)
+    if (cover != null) {
+        Image(
+            bitmap = checkNotNull(cover),
+            contentDescription = "Cover of ${book.title}",
+            modifier = Modifier
+                .size(width = 72.dp, height = 96.dp)
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(width = 72.dp, height = 96.dp)
+                .background(
+                    if (book.mimeType == EbookRepository.PDF_MIME) {
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                    } else {
+                        MaterialTheme.colorScheme.primaryContainer
+                    },
+                    shape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (book.mimeType == EbookRepository.PDF_MIME) "PDF" else "EPUB",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun BookCard(
     book: Book,
     duplicateKind: DuplicateKind,
@@ -502,30 +589,7 @@ private fun BookCard(
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 48.dp, height = 58.dp)
-                        .background(
-                            if (book.mimeType == EbookRepository.PDF_MIME) {
-                                Color(0xFFFFE8E5)
-                            } else {
-                                Color(0xFFE0F3FF)
-                            },
-                            RoundedCornerShape(10.dp),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (book.mimeType == EbookRepository.PDF_MIME) "PDF" else "EPUB",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (book.mimeType == EbookRepository.PDF_MIME) {
-                            Color(0xFF9D2A22)
-                        } else {
-                            Color(0xFF165A78)
-                        },
-                    )
-                }
+                BookCover(book)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(

@@ -27,6 +27,7 @@ data class AthenaUiState(
     val scanning: Boolean = false,
     val scannedCount: Int = 0,
     val libraryFolder: String? = null,
+    val darkMode: Boolean = false,
     val message: String? = null,
 )
 
@@ -35,7 +36,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = application.getSharedPreferences(PREFERENCES, 0)
     private val operationActive = AtomicBoolean(false)
     private val _uiState = MutableStateFlow(
-        AthenaUiState(libraryFolder = preferences.getString(LIBRARY_FOLDER, null)),
+        AthenaUiState(
+            libraryFolder = preferences.getString(LIBRARY_FOLDER, null),
+            darkMode = preferences.getBoolean(DARK_MODE, false),
+        ),
     )
     val uiState: StateFlow<AthenaUiState> = _uiState.asStateFlow()
 
@@ -127,6 +131,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(message = null) }
     }
 
+    fun toggleTheme() {
+        val darkMode = !_uiState.value.darkMode
+        preferences.edit { putBoolean(DARK_MODE, darkMode) }
+        _uiState.update { it.copy(darkMode = darkMode) }
+    }
+
     private fun refresh() {
         viewModelScope.launch { loadCatalog() }
     }
@@ -150,5 +160,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val PREFERENCES = "athena_preferences"
         private const val LIBRARY_FOLDER = "library_folder"
+        private const val DARK_MODE = "dark_mode"
     }
 }

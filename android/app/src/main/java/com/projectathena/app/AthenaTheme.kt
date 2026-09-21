@@ -1,6 +1,7 @@
 package com.projectathena.app
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -24,10 +25,32 @@ private val AthenaColors = lightColorScheme(
     error = Color(0xFFBA1A1A),
 )
 
+private val AthenaDarkColors = darkColorScheme(
+    primary = Color(0xFFB6DCCF),
+    onPrimary = Color(0xFF00382E),
+    primaryContainer = Color(0xFF175044),
+    onPrimaryContainer = Color(0xFFD1F5E9),
+    secondary = Color(0xFFC9D98A),
+    onSecondary = Color(0xFF323E00),
+    secondaryContainer = Color(0xFF495600),
+    onSecondaryContainer = Color(0xFFE6F6A3),
+    background = Color(0xFF101411),
+    onBackground = Color(0xFFE0E4DF),
+    surface = Color(0xFF181D1A),
+    onSurface = Color(0xFFE0E4DF),
+    surfaceVariant = Color(0xFF3F4945),
+    onSurfaceVariant = Color(0xFFBFC9C4),
+    outline = Color(0xFF89938E),
+    error = Color(0xFFFFB4AB),
+)
+
 @Composable
-fun AthenaTheme(content: @Composable () -> Unit) {
+fun AthenaTheme(
+    darkTheme: Boolean,
+    content: @Composable () -> Unit,
+) {
     MaterialTheme(
-        colorScheme = AthenaColors,
+        colorScheme = if (darkTheme) AthenaDarkColors else AthenaColors,
         content = content,
     )
 }
