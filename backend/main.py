@@ -42,18 +42,34 @@ def create_app(database_path: Path | str | None = None) -> FastAPI:
 
     @app.get("/api/downloads/android")
     def download_android_apk() -> FileResponse:
-        archive_path = (
-            Path(__file__).resolve().parent.parent
-            / "releases"
-            / "project-athena-v0.3.0-debug.zip"
-        )
-        if not archive_path.exists():
+        releases_dir = Path(__file__).resolve().parent.parent / "releases"
+        # Serve the latest version available in releases directory
+        apk_files = sorted(releases_dir.glob("project-athena-v*-debug.apk"))
+        zip_files = sorted(releases_dir.glob("project-athena-v*-debug.zip"))
+        
+        target_path = zip_files[-1] if zip_files else (apk_files[-1] if apk_files else None)
+        if not target_path or not target_path.exists():
             raise HTTPException(status_code=404, detail="Android build is unavailable")
 
+        media_type = "application/zip" if target_path.suffix == ".zip" else "application/vnd.android.package-archive"
         return FileResponse(
-            archive_path,
-            media_type="application/zip",
-            filename="project-athena-android-v0.3.0.zip",
+            target_path,
+            media_type=media_type,
+            filename=target_path.name,
+        )
+
+    @app.get("/api/downloads/android/apk")
+    def download_android_apk_direct() -> FileResponse:
+        releases_dir = Path(__file__).resolve().parent.parent / "releases"
+        apk_files = sorted(releases_dir.glob("project-athena-v*-debug.apk"))
+        if not apk_files or not apk_files[-1].exists():
+            raise HTTPException(status_code=404, detail="Android APK is unavailable")
+
+        target_path = apk_files[-1]
+        return FileResponse(
+            target_path,
+            media_type="application/vnd.android.package-archive",
+            filename=target_path.name,
         )
 
     @app.get("/api/folders")
