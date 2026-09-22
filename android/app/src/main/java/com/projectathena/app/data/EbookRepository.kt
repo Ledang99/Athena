@@ -108,6 +108,14 @@ class EbookRepository(private val context: Context) {
         database.updateNoteCollections(noteId, collections)
     }
 
+    fun categories(): List<BookCategory> = database.categories()
+
+    fun addCategory(label: String): BookCategory? = database.addCategory(label)
+
+    fun updateCategory(id: String, newLabel: String): Boolean = database.updateCategory(id, newLabel)
+
+    fun deleteCategory(id: String) = database.deleteCategory(id)
+
     fun markOpened(bookId: Long) = database.markOpened(bookId)
 
     fun scanFolder(

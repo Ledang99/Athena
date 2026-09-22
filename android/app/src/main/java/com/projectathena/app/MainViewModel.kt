@@ -8,6 +8,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.projectathena.app.data.Book
+import com.projectathena.app.data.BookCategory
 import com.projectathena.app.data.BookSummaryImage
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.CatalogStats
@@ -47,6 +48,7 @@ data class AthenaUiState(
     val selectedDossierBookId: Long? = null,
     val dossierImages: List<BookSummaryImage> = emptyList(),
     val dossierNotes: List<CapturedNote> = emptyList(),
+    val categories: List<BookCategory> = emptyList(),
     val darkMode: Boolean = false,
     val preferredViewerPackage: String? = null,
     val availableViewers: List<ViewerApp> = emptyList(),
@@ -302,7 +304,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun markOpened(book: Book) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { repository.markOpened(book.id) }
+            withContext<Unit>(Dispatchers.IO) { repository.markOpened(book.id) }
             loadCatalog()
         }
     }
@@ -409,16 +411,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { loadCatalog() }
     }
 
+    fun addCategory(label: String) {
+        viewModelScope.launch {
+            val added = withContext(Dispatchers.IO) { repository.addCategory(label) }
+            if (added != null) {
+                loadCatalog(message = "Category added: ${added.label}")
+            } else {
+                _uiState.update { it.copy(message = "Category already exists or invalid") }
+            }
+        }
+    }
+
+    fun updateCategory(id: String, newLabel: String) {
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) { repository.updateCategory(id, newLabel) }
+            if (success) {
+                loadCatalog(message = "Category updated")
+            }
+        }
+    }
+
+    fun deleteCategory(id: String) {
+        viewModelScope.launch {
+            withContext<Unit>(Dispatchers.IO) { repository.deleteCategory(id) }
+            loadCatalog(message = "Category deleted")
+        }
+    }
+
     private suspend fun loadCatalog(message: String? = null) {
         val snapshot = withContext(Dispatchers.IO) {
-            Triple(repository.books(), repository.notes(), repository.catalogStats())
+            val books = repository.books()
+            val notes = repository.notes()
+            val stats = repository.catalogStats()
+            val cats = repository.categories()
+            Tuple4(books, notes, stats, cats)
         }
-        val (books, notes, stats) = snapshot
+        val (books, notes, stats, cats) = snapshot
         _uiState.update {
             it.copy(
                 books = books,
                 notes = notes,
                 catalogStats = stats,
+                categories = cats,
                 duplicateGroups = buildDuplicateGroups(books),
                 libraryFolders = loadFolders(),
                 scanning = false,
@@ -427,6 +461,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
     }
+
+    private data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
     companion object {
         private const val PREFERENCES = "athena_preferences"

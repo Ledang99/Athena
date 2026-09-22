@@ -30,6 +30,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.projectathena.app.data.Book
+import com.projectathena.app.data.BookCategory
 import com.projectathena.app.data.DuplicateKind
 import com.projectathena.app.data.EbookRepository
 import com.projectathena.app.data.LibraryCollection
@@ -102,6 +107,9 @@ fun LibraryShelfScreen(
     onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
     onSetViewMode: (LibraryViewMode) -> Unit,
     onToggleTheme: () -> Unit,
+    onAddCategory: (String) -> Unit = {},
+    onUpdateCategory: (String, String) -> Unit = { _, _ -> },
+    onDeleteCategory: (String) -> Unit = {},
 ) {
     var sectionKey by rememberSaveable { mutableStateOf("all") }
     var search by rememberSaveable { mutableStateOf("") }
@@ -172,6 +180,7 @@ fun LibraryShelfScreen(
             overflowOpen = overflowOpen,
             onOverflowOpenChange = { overflowOpen = it },
             folders = state.libraryFolders,
+            categories = state.categories,
             onSelectSection = { key ->
                 sectionKey = key
                 sectionMenuOpen = false
@@ -286,6 +295,10 @@ fun LibraryShelfScreen(
     editingBook?.let { book ->
         EditBookDialog(
             book = book,
+            categories = state.categories,
+            onAddCategory = onAddCategory,
+            onUpdateCategory = onUpdateCategory,
+            onDeleteCategory = onDeleteCategory,
             onDismiss = { editingBook = null },
             onSave = { title, author, tags, collections, status ->
                 onUpdateOrganization(book, title, author, tags, collections, status)
@@ -307,6 +320,7 @@ private fun LibraryTopLiner(
     overflowOpen: Boolean,
     onOverflowOpenChange: (Boolean) -> Unit,
     folders: List<LibraryFolder>,
+    categories: List<BookCategory> = emptyList(),
     onSelectSection: (String) -> Unit,
     onAddFolder: () -> Unit,
     onImportFiles: () -> Unit,
@@ -410,10 +424,15 @@ private fun LibraryTopLiner(
                         }
                     }
                     HorizontalDivider()
-                    LibraryCollection.entries.forEach { collection ->
+                    val catItems = if (categories.isNotEmpty()) {
+                        categories
+                    } else {
+                        LibraryCollection.entries.map { BookCategory(it.id, it.label) }
+                    }
+                    catItems.forEach { cat ->
                         DropdownMenuItem(
-                            text = { Text(collection.label) },
-                            onClick = { onSelectSection("collection:${collection.id}") },
+                            text = { Text(cat.label) },
+                            onClick = { onSelectSection("collection:${cat.id}") },
                         )
                     }
                 }
@@ -828,9 +847,14 @@ private fun FilterDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditBookDialog(
     book: Book,
+    categories: List<BookCategory> = emptyList(),
+    onAddCategory: (String) -> Unit = {},
+    onUpdateCategory: (String, String) -> Unit = { _, _ -> },
+    onDeleteCategory: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
 ) {
@@ -839,6 +863,19 @@ internal fun EditBookDialog(
     var tagsText by remember(book.id) { mutableStateOf(book.tags.joinToString(", ")) }
     var selectedCollections by remember(book.id) { mutableStateOf(book.collections.toSet()) }
     var readingStatus by remember(book.id) { mutableStateOf(book.readingStatus) }
+    var statusDropdownExpanded by remember { mutableStateOf(false) }
+    var newCategoryText by remember { mutableStateOf("") }
+    var showAddCategory by remember { mutableStateOf(false) }
+    var editingCategoryInDialog by remember { mutableStateOf<BookCategory?>(null) }
+    var editCategoryInDialogText by remember { mutableStateOf("") }
+
+    val allCategories = remember(categories) {
+        if (categories.isNotEmpty()) {
+            categories
+        } else {
+            LibraryCollection.entries.map { BookCategory(it.id, it.label) }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -873,35 +910,132 @@ internal fun EditBookDialog(
                 }
                 item {
                     Text("Reading status", fontWeight = FontWeight.SemiBold)
-                    Row(
-                        modifier = Modifier.padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        ReadingStatus.entries.forEach { status ->
-                            FilterChip(
-                                selected = readingStatus == status,
-                                onClick = { readingStatus = status },
-                                label = { Text(status.label) },
+                    Box(modifier = Modifier.padding(top = 4.dp)) {
+                        ExposedDropdownMenuBox(
+                            expanded = statusDropdownExpanded,
+                            onExpandedChange = { statusDropdownExpanded = it },
+                        ) {
+                            OutlinedTextField(
+                                value = readingStatus.label,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier
+                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                                    .fillMaxWidth(),
+                                label = { Text("Status") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(
+                                        expanded = statusDropdownExpanded,
+                                    )
+                                },
+                                singleLine = true,
                             )
+                            ExposedDropdownMenu(
+                                expanded = statusDropdownExpanded,
+                                onDismissRequest = { statusDropdownExpanded = false },
+                            ) {
+                                ReadingStatus.entries.forEach { status ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (readingStatus == status) {
+                                                    "${status.label} ✓"
+                                                } else {
+                                                    status.label
+                                                },
+                                            )
+                                        },
+                                        onClick = {
+                                            readingStatus = status
+                                            statusDropdownExpanded = false
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
                 item {
-                    Text("Collections", fontWeight = FontWeight.SemiBold)
-                }
-                items(LibraryCollection.entries.chunked(2)) { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { collection ->
-                            FilterChip(
-                                selected = collection.id in selectedCollections,
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Categories", fontWeight = FontWeight.SemiBold)
+                        TextButton(onClick = { showAddCategory = !showAddCategory }) {
+                            Text(if (showAddCategory) "Done" else "+ Add Category")
+                        }
+                    }
+                    if (showAddCategory) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = newCategoryText,
+                                onValueChange = { newCategoryText = it },
+                                placeholder = { Text("New category name") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Button(
                                 onClick = {
-                                    selectedCollections = if (collection.id in selectedCollections) {
-                                        selectedCollections - collection.id
-                                    } else {
-                                        selectedCollections + collection.id
+                                    if (newCategoryText.isNotBlank()) {
+                                        onAddCategory(newCategoryText.trim())
+                                        newCategoryText = ""
                                     }
                                 },
-                                label = { Text(collection.label) },
+                                enabled = newCategoryText.isNotBlank(),
+                            ) {
+                                Text("Add")
+                            }
+                        }
+                    }
+                }
+                items(allCategories.chunked(2)) { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        row.forEach { category ->
+                            FilterChip(
+                                selected = category.id in selectedCollections,
+                                onClick = {
+                                    selectedCollections = if (category.id in selectedCollections) {
+                                        selectedCollections - category.id
+                                    } else {
+                                        selectedCollections + category.id
+                                    }
+                                },
+                                label = { Text(category.label) },
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "✎",
+                                            modifier = Modifier
+                                                .padding(start = 2.dp, end = 2.dp)
+                                                .clickable {
+                                                    editingCategoryInDialog = category
+                                                    editCategoryInDialogText = category.label
+                                                },
+                                            fontSize = 12.sp,
+                                        )
+                                        Text(
+                                            "×",
+                                            modifier = Modifier
+                                                .padding(start = 2.dp)
+                                                .clickable {
+                                                    onDeleteCategory(category.id)
+                                                    selectedCollections = selectedCollections - category.id
+                                                },
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                        )
+                                    }
+                                },
                             )
                         }
                     }
@@ -931,6 +1065,40 @@ internal fun EditBookDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+
+    editingCategoryInDialog?.let { cat ->
+        AlertDialog(
+            onDismissRequest = { editingCategoryInDialog = null },
+            title = { Text("Edit category") },
+            text = {
+                OutlinedTextField(
+                    value = editCategoryInDialogText,
+                    onValueChange = { editCategoryInDialogText = it },
+                    label = { Text("Category name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editCategoryInDialogText.isNotBlank()) {
+                            onUpdateCategory(cat.id, editCategoryInDialogText.trim())
+                            editingCategoryInDialog = null
+                        }
+                    },
+                    enabled = editCategoryInDialogText.isNotBlank(),
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCategoryInDialog = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 }
 
 private fun resolveSection(key: String, state: AthenaUiState): ShelfSection = when {
@@ -949,9 +1117,10 @@ private fun resolveSection(key: String, state: AthenaUiState): ShelfSection = wh
     }
     key.startsWith("collection:") -> {
         val id = key.removePrefix("collection:")
-        val collection = LibraryCollection.fromId(id)
-        if (collection != null) {
-            ShelfSection.Collection(collection.id, collection.label)
+        val cat = state.categories.firstOrNull { it.id == id }
+        val label = cat?.label ?: LibraryCollection.fromId(id)?.label
+        if (label != null) {
+            ShelfSection.Collection(id, label)
         } else {
             ShelfSection.AllBooks
         }

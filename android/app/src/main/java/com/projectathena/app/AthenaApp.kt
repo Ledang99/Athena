@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.projectathena.app.data.Book
+import com.projectathena.app.data.BookCategory
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.DuplicateKind
@@ -102,6 +103,7 @@ fun AthenaApp(
     val context = LocalContext.current
     var screen by rememberSaveable { mutableStateOf(Screen.LIBRARY) }
     val snackbarHostState = remember { SnackbarHostState() }
+    var editingDossierBook by remember { mutableStateOf<Book?>(null) }
 
     val folderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -232,6 +234,7 @@ fun AthenaApp(
                             book = dossierBook,
                             summaryImages = state.dossierImages,
                             notes = state.dossierNotes,
+                            categories = state.categories,
                             onBack = viewModel::closeDossier,
                             onOpenBook = onOpenBook,
                             onAddSummaryImage = { uri, caption ->
@@ -250,9 +253,26 @@ fun AthenaApp(
                                 viewModel.updateReadingStatus(dossierBook, status)
                             },
                             onEditDetails = {
-                                // Can edit via shelf or keep simple
+                                editingDossierBook = dossierBook
                             },
                         )
+                        editingDossierBook?.let { bookToEdit ->
+                            // Use latest state of book if available
+                            val currentBook = state.books.firstOrNull { it.id == bookToEdit.id } ?: bookToEdit
+                            EditBookDialog(
+                                book = currentBook,
+                                categories = state.categories,
+                                onAddCategory = viewModel::addCategory,
+                                onUpdateCategory = viewModel::updateCategory,
+                                onDeleteCategory = viewModel::deleteCategory,
+                                onDismiss = { editingDossierBook = null },
+                                onSave = { title, author, tags, collections, status ->
+                                    viewModel.updateOrganization(currentBook, title, author, tags, collections, status)
+                                    // Update local editing reference so if dialog stays or reopens it has new data
+                                    editingDossierBook = null
+                                },
+                            )
+                        }
                     } else {
                         LibraryShelfScreen(
                             state = state,
@@ -274,6 +294,9 @@ fun AthenaApp(
                             onUpdateReadingStatus = viewModel::updateReadingStatus,
                             onSetViewMode = viewModel::setViewMode,
                             onToggleTheme = viewModel::toggleTheme,
+                            onAddCategory = viewModel::addCategory,
+                            onUpdateCategory = viewModel::updateCategory,
+                            onDeleteCategory = viewModel::deleteCategory,
                         )
                     }
                 }
@@ -294,6 +317,7 @@ fun AthenaApp(
                     }
                     NotesScreen(
                         notes = state.notes,
+                        categories = state.categories,
                         onUpdateCollections = viewModel::updateNoteCollections,
                     )
                 }
@@ -307,6 +331,9 @@ fun AthenaApp(
                         onPreferredViewer = viewModel::setPreferredViewer,
                         onRefreshViewers = viewModel::refreshViewers,
                         onToggleTheme = viewModel::toggleTheme,
+                        onAddCategory = viewModel::addCategory,
+                        onUpdateCategory = viewModel::updateCategory,
+                        onDeleteCategory = viewModel::deleteCategory,
                     )
                 }
             }
@@ -519,13 +546,21 @@ private fun DuplicateGroupCard(
 @Composable
 private fun NotesScreen(
     notes: List<CapturedNote>,
+    categories: List<BookCategory> = emptyList(),
     onUpdateCollections: (CapturedNote, List<String>) -> Unit,
 ) {
     var collectionFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var editingNoteId by remember { mutableStateOf<Long?>(null) }
-    val activeCollections = remember(notes) {
-        LibraryCollection.entries.filter { collection ->
-            notes.any { collection.id in it.collections }
+    val allCategories = remember(categories) {
+        if (categories.isNotEmpty()) {
+            categories
+        } else {
+            LibraryCollection.entries.map { BookCategory(it.id, it.label) }
+        }
+    }
+    val activeCollections = remember(notes, allCategories) {
+        allCategories.filter { cat ->
+            notes.any { cat.id in it.collections }
         }
     }
     val visibleNotes = remember(notes, collectionFilter) {
@@ -616,7 +651,7 @@ private fun NotesScreen(
                 Card {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(note.text, style = MaterialTheme.typography.bodyLarge)
-                        val labels = note.collectionLabels()
+                        val labels = note.collectionLabels(categories)
                         if (labels.isNotEmpty()) {
                             Text(
                                 labels.joinToString(" · "),
@@ -649,6 +684,7 @@ private fun NotesScreen(
     if (editingNote != null) {
         NoteCollectionsDialog(
             note = editingNote,
+            categories = allCategories,
             onDismiss = { editingNoteId = null },
             onSave = { collections ->
                 onUpdateCollections(editingNote, collections)
@@ -661,28 +697,34 @@ private fun NotesScreen(
 @Composable
 private fun NoteCollectionsDialog(
     note: CapturedNote,
+    categories: List<BookCategory> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (List<String>) -> Unit,
 ) {
     var selectedCollections by remember(note.id) { mutableStateOf(note.collections.toSet()) }
+    val displayCategories = if (categories.isNotEmpty()) {
+        categories
+    } else {
+        LibraryCollection.entries.map { BookCategory(it.id, it.label) }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Note collections") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(LibraryCollection.entries.chunked(2)) { row ->
+                items(displayCategories.chunked(2)) { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { collection ->
+                        row.forEach { category ->
                             FilterChip(
-                                selected = collection.id in selectedCollections,
+                                selected = category.id in selectedCollections,
                                 onClick = {
-                                    selectedCollections = if (collection.id in selectedCollections) {
-                                        selectedCollections - collection.id
+                                    selectedCollections = if (category.id in selectedCollections) {
+                                        selectedCollections - category.id
                                     } else {
-                                        selectedCollections + collection.id
+                                        selectedCollections + category.id
                                     }
                                 },
-                                label = { Text(collection.label) },
+                                label = { Text(category.label) },
                             )
                         }
                     }
@@ -709,8 +751,14 @@ private fun SettingsScreen(
     onPreferredViewer: (String?) -> Unit,
     onRefreshViewers: () -> Unit,
     onToggleTheme: () -> Unit,
+    onAddCategory: (String) -> Unit = {},
+    onUpdateCategory: (String, String) -> Unit = { _, _ -> },
+    onDeleteCategory: (String) -> Unit = {},
 ) {
     var viewerMenuExpanded by remember { mutableStateOf(false) }
+    var newCategoryText by remember { mutableStateOf("") }
+    var editingCategory by remember { mutableStateOf<BookCategory?>(null) }
+    var editCategoryText by remember { mutableStateOf("") }
     val preferredLabel = state.availableViewers
         .firstOrNull { it.packageName == state.preferredViewerPackage }
         ?.label
@@ -728,11 +776,107 @@ private fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "Choose how Athena opens ebooks and how the app looks.",
+                "Manage categories, preferred reader, and appearance.",
                 modifier = Modifier.padding(top = 4.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+
+        // Manage Categories Section
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Manage categories",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Add, edit, or delete categories used to organize books and notes.",
+                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = newCategoryText,
+                            onValueChange = { newCategoryText = it },
+                            placeholder = { Text("New category name") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            onClick = {
+                                if (newCategoryText.isNotBlank()) {
+                                    onAddCategory(newCategoryText.trim())
+                                    newCategoryText = ""
+                                }
+                            },
+                            enabled = newCategoryText.isNotBlank(),
+                        ) {
+                            Text("Add")
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    val allCats = if (state.categories.isNotEmpty()) {
+                        state.categories
+                    } else {
+                        LibraryCollection.entries.map { BookCategory(it.id, it.label) }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        allCats.forEach { category ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    category.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    TextButton(
+                                        onClick = {
+                                            editingCategory = category
+                                            editCategoryText = category.label
+                                        },
+                                    ) {
+                                        Text("Edit", fontSize = 13.sp)
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            onDeleteCategory(category.id)
+                                        },
+                                    ) {
+                                        Text(
+                                            "Delete",
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         item {
@@ -836,6 +980,40 @@ private fun SettingsScreen(
                 }
             }
         }
+    }
+
+    editingCategory?.let { category ->
+        AlertDialog(
+            onDismissRequest = { editingCategory = null },
+            title = { Text("Edit category") },
+            text = {
+                OutlinedTextField(
+                    value = editCategoryText,
+                    onValueChange = { editCategoryText = it },
+                    label = { Text("Category name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editCategoryText.isNotBlank()) {
+                            onUpdateCategory(category.id, editCategoryText.trim())
+                            editingCategory = null
+                        }
+                    },
+                    enabled = editCategoryText.isNotBlank(),
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCategory = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 

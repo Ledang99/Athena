@@ -49,4 +49,32 @@ class BookDossierModelsTest {
         assertEquals("Chapter 1-3 Mind Map", summaryImage.caption)
         assertNotNull(summaryImage.imagePath)
     }
+
+    @Test
+    fun bookCategoryPropertiesAndLabels() {
+        val cat = BookCategory("startups", "Startups & Solopreneurship")
+        assertEquals("startups", cat.id)
+        assertEquals("Startups & Solopreneurship", cat.label)
+
+        val book = Book(
+            id = 1L,
+            uri = "content://books/1",
+            displayName = "the 100 startup.pdf",
+            title = "The $100 Startup",
+            author = "Chris Guillebeau",
+            mimeType = "application/pdf",
+            sizeBytes = 1000L,
+            modifiedAt = 1000L,
+            sha256 = "abc",
+            coverPath = null,
+            sourceFolder = null,
+            folderName = null,
+            collections = listOf("startups", "habits"),
+            addedAt = 1000L,
+            lastOpenedAt = null,
+        )
+
+        val labels = book.collectionLabels(listOf(cat))
+        assertEquals(listOf("Startups & Solopreneurship", "Habits"), labels)
+    }
 }

@@ -24,6 +24,11 @@ data class Book(
     val lastOpenedAt: Long?,
 )
 
+data class BookCategory(
+    val id: String,
+    val label: String,
+)
+
 data class CapturedNote(
     val id: Long,
     val bookId: Long? = null,

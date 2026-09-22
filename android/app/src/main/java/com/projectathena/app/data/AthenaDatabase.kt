@@ -64,7 +64,22 @@ class AthenaDatabase(context: Context) :
             )
             """.trimIndent(),
         )
-        database.execSQL("CREATE INDEX book_images_book_idx ON book_images(book_id)")
+        database.execSQL(
+            """
+            CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        // Seed default standard categories
+        LibraryCollection.entries.forEach { col ->
+            database.execSQL(
+                "INSERT OR IGNORE INTO categories (id, label, created_at) VALUES (?, ?, ?)",
+                arrayOf<Any>(col.id, col.label, System.currentTimeMillis()),
+            )
+        }
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -104,6 +119,23 @@ class AthenaDatabase(context: Context) :
                 """.trimIndent(),
             )
             database.execSQL("CREATE INDEX IF NOT EXISTS book_images_book_idx ON book_images(book_id)")
+        }
+        if (oldVersion < 6) {
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories (
+                    id TEXT PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+            LibraryCollection.entries.forEach { col ->
+                database.execSQL(
+                    "INSERT OR IGNORE INTO categories (id, label, created_at) VALUES (?, ?, ?)",
+                    arrayOf<Any>(col.id, col.label, System.currentTimeMillis()),
+                )
+            }
         }
     }
 
@@ -446,8 +478,88 @@ class AthenaDatabase(context: Context) :
         return getInt(index)
     }
 
+    fun categories(): List<BookCategory> = readableDatabase.query(
+        "categories",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "label COLLATE NOCASE ASC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    BookCategory(
+                        id = cursor.string("id"),
+                        label = cursor.string("label"),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun addCategory(label: String): BookCategory? {
+        val cleanLabel = label.trim()
+        if (cleanLabel.isBlank()) return null
+        val id = cleanLabel.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+        if (id.isBlank()) return null
+        val values = ContentValues().apply {
+            put("id", id)
+            put("label", cleanLabel)
+            put("created_at", System.currentTimeMillis())
+        }
+        val inserted = writableDatabase.insertWithOnConflict(
+            "categories",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+        return if (inserted != -1L) BookCategory(id, cleanLabel) else null
+    }
+
+    fun updateCategory(id: String, newLabel: String): Boolean {
+        val cleanLabel = newLabel.trim()
+        if (cleanLabel.isBlank()) return false
+        val values = ContentValues().apply {
+            put("label", cleanLabel)
+        }
+        return writableDatabase.update("categories", values, "id = ?", arrayOf(id)) > 0
+    }
+
+    fun deleteCategory(id: String) {
+        writableDatabase.delete("categories", "id = ?", arrayOf(id))
+        // Also remove this category id from books and notes
+        readableDatabase.rawQuery("SELECT id, collections FROM books WHERE collections LIKE ?", arrayOf("%$id%")).use { cursor ->
+            while (cursor.moveToNext()) {
+                val bookId = cursor.getLong(0)
+                val cols = decodeStringList(cursor.getString(1))
+                if (id in cols) {
+                    val updated = cols.filterNot { it == id }
+                    val v = ContentValues().apply {
+                        put("collections", encodeStringList(updated).ifBlank { null })
+                    }
+                    writableDatabase.update("books", v, "id = ?", arrayOf(bookId.toString()))
+                }
+            }
+        }
+        readableDatabase.rawQuery("SELECT id, collections FROM notes WHERE collections LIKE ?", arrayOf("%$id%")).use { cursor ->
+            while (cursor.moveToNext()) {
+                val noteId = cursor.getLong(0)
+                val cols = decodeStringList(cursor.getString(1))
+                if (id in cols) {
+                    val updated = cols.filterNot { it == id }
+                    val v = ContentValues().apply {
+                        put("collections", encodeStringList(updated).ifBlank { null })
+                    }
+                    writableDatabase.update("notes", v, "id = ?", arrayOf(noteId.toString()))
+                }
+            }
+        }
+    }
+
     companion object {
         private const val DATABASE_NAME = "athena.db"
-        private const val DATABASE_VERSION = 5
+        private const val DATABASE_VERSION = 6
     }
 }

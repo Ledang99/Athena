@@ -141,8 +141,16 @@ fun decodeStringList(raw: String?): List<String> =
         ?.filter { it.isNotBlank() }
         .orEmpty()
 
-fun Book.collectionLabels(): List<String> =
-    collections.mapNotNull { id -> LibraryCollection.fromId(id)?.label ?: id.takeIf { it.isNotBlank() } }
+fun Book.collectionLabels(categories: List<BookCategory> = emptyList()): List<String> {
+    val categoryMap = categories.associate { it.id to it.label }
+    return collections.mapNotNull { id ->
+        categoryMap[id] ?: LibraryCollection.fromId(id)?.label ?: id.takeIf { it.isNotBlank() }
+    }
+}
 
-fun CapturedNote.collectionLabels(): List<String> =
-    collections.mapNotNull { id -> LibraryCollection.fromId(id)?.label ?: id.takeIf { it.isNotBlank() } }
+fun CapturedNote.collectionLabels(categories: List<BookCategory> = emptyList()): List<String> {
+    val categoryMap = categories.associate { it.id to it.label }
+    return collections.mapNotNull { id ->
+        categoryMap[id] ?: LibraryCollection.fromId(id)?.label ?: id.takeIf { it.isNotBlank() }
+    }
+}

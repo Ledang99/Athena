@@ -33,7 +33,12 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
@@ -68,6 +73,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.projectathena.app.data.Book
+import com.projectathena.app.data.BookCategory
 import com.projectathena.app.data.BookSummaryImage
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.ReadingStatus
@@ -84,6 +90,7 @@ fun BookDossierScreen(
     book: Book,
     summaryImages: List<BookSummaryImage>,
     notes: List<CapturedNote>,
+    categories: List<BookCategory> = emptyList(),
     onBack: () -> Unit,
     onOpenBook: (Book) -> Unit,
     onAddSummaryImage: (Uri, String?) -> Unit,
@@ -96,6 +103,7 @@ fun BookDossierScreen(
     var newNoteText by remember { mutableStateOf("") }
     var fullScreenImage by remember { mutableStateOf<BookSummaryImage?>(null) }
     var pendingImageUri by remember { mutableStateOf<Uri?>(null) }
+    var statusDropdownExpanded by remember { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -181,32 +189,68 @@ fun BookDossierScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
 
-                            // Reading status chips
-                            Row(
-                                modifier = Modifier.padding(top = 10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                ReadingStatus.entries.forEach { status ->
-                                    FilterChip(
-                                        selected = book.readingStatus == status,
-                                        onClick = { onUpdateReadingStatus(status) },
-                                        label = { Text(status.label) },
+                            // Reading status dropdown selection
+                            Box(modifier = Modifier.padding(top = 10.dp)) {
+                                ExposedDropdownMenuBox(
+                                    expanded = statusDropdownExpanded,
+                                    onExpandedChange = { statusDropdownExpanded = it },
+                                ) {
+                                    OutlinedTextField(
+                                        value = book.readingStatus.label,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        modifier = Modifier
+                                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                                            .fillMaxWidth(),
+                                        label = { Text("Status") },
+                                        trailingIcon = {
+                                            ExposedDropdownMenuDefaults.TrailingIcon(
+                                                expanded = statusDropdownExpanded,
+                                            )
+                                        },
+                                        singleLine = true,
                                     )
+                                    ExposedDropdownMenu(
+                                        expanded = statusDropdownExpanded,
+                                        onDismissRequest = { statusDropdownExpanded = false },
+                                    ) {
+                                        ReadingStatus.entries.forEach { status ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        if (book.readingStatus == status) {
+                                                            "${status.label} ✓"
+                                                        } else {
+                                                            status.label
+                                                        },
+                                                    )
+                                                },
+                                                onClick = {
+                                                    onUpdateReadingStatus(status)
+                                                    statusDropdownExpanded = false
+                                                },
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
                             // Collections & tags
-                            val labels = book.collectionLabels() + book.tags
+                            val labels = book.collectionLabels(categories) + book.tags
                             if (labels.isNotEmpty()) {
-                                Row(
+                                Column(
                                     modifier = Modifier.padding(top = 8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    labels.take(4).forEach { label ->
-                                        AssistChip(
-                                            onClick = {},
-                                            label = { Text(label, maxLines = 1) },
-                                        )
+                                    labels.chunked(2).forEach { rowLabels ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            rowLabels.forEach { label ->
+                                                AssistChip(
+                                                    onClick = onEditDetails,
+                                                    label = { Text(label, maxLines = 1) },
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -490,9 +534,9 @@ private fun FullScreenImageViewer(
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
 
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+    val transformState = rememberTransformableState { zoomChange, offsetChange, _ ->
         scale = (scale * zoomChange).coerceIn(0.8f, 5f)
-        offset += panChange
+        offset += offsetChange
     }
 
     Dialog(

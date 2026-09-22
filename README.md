@@ -70,9 +70,12 @@ No file operation is performed from either report.
 The native app in [`android/`](android/) is the phone-first reading inbox:
 
 Download the current test build:
-[`project-athena-v0.7.0-debug.zip`](releases/project-athena-v0.7.0-debug.zip)
+[`project-athena-v0.8.0-debug.zip`](releases/project-athena-v0.8.0-debug.zip)
 
 - **Book Dossier**: tap any book to open its dedicated study page
+- **Edit details**: full metadata, tag, status, and category editing right from the Dossier and Shelf
+- **Status dropdown**: easily select Unread / Reading / Finished from a dropdown
+- **Custom categories**: add, edit, or delete categories manually in both Settings and Edit dialogs
 - **Visual summaries & mind maps**: attach Pinterest/web infographics and slides with full pinch-to-zoom
 - **Per-book notes**: write takeaways or review notes directly attached to a specific ebook
 - Moon+-style reading shelf with a compact top bar and cover tiles by default
