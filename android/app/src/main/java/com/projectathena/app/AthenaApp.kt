@@ -136,7 +136,7 @@ fun AthenaApp(
         viewModel.clearMessage()
     }
 
-    val showBrandBar = screen != Screen.LIBRARY
+    val showBrandBar = screen != Screen.LIBRARY && state.selectedDossierBookId == null
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -225,43 +225,90 @@ fun AthenaApp(
                 .padding(innerPadding),
         ) {
             when (screen) {
-                Screen.LIBRARY -> LibraryShelfScreen(
-                    state = state,
-                    onAddFolder = { folderLauncher.launch(null) },
-                    onImportFiles = {
-                        filesLauncher.launch(
-                            arrayOf(
-                                EbookRepository.PDF_MIME,
-                                EbookRepository.EPUB_MIME,
-                                "application/octet-stream",
-                            ),
+                Screen.LIBRARY -> {
+                    val dossierBook = state.books.firstOrNull { it.id == state.selectedDossierBookId }
+                    if (dossierBook != null) {
+                        BookDossierScreen(
+                            book = dossierBook,
+                            summaryImages = state.dossierImages,
+                            notes = state.dossierNotes,
+                            onBack = viewModel::closeDossier,
+                            onOpenBook = onOpenBook,
+                            onAddSummaryImage = { uri, caption ->
+                                viewModel.addSummaryImageToBook(dossierBook.id, uri, caption)
+                            },
+                            onDeleteSummaryImage = { imageId ->
+                                viewModel.deleteSummaryImage(imageId, dossierBook.id)
+                            },
+                            onAddNote = { text ->
+                                viewModel.addNoteToBook(dossierBook.id, text)
+                            },
+                            onDeleteNote = { noteId ->
+                                viewModel.deleteNote(noteId, dossierBook.id)
+                            },
+                            onUpdateReadingStatus = { status ->
+                                viewModel.updateReadingStatus(dossierBook, status)
+                            },
+                            onEditDetails = {
+                                // Can edit via shelf or keep simple
+                            },
                         )
-                    },
-                    onRescanAll = viewModel::rescanAll,
-                    onRemoveFolder = viewModel::removeFolder,
-                    onOpenBook = onOpenBook,
-                    onUpdateOrganization = viewModel::updateOrganization,
-                    onUpdateReadingStatus = viewModel::updateReadingStatus,
-                    onSetViewMode = viewModel::setViewMode,
-                    onToggleTheme = viewModel::toggleTheme,
-                )
+                    } else {
+                        LibraryShelfScreen(
+                            state = state,
+                            onAddFolder = { folderLauncher.launch(null) },
+                            onImportFiles = {
+                                filesLauncher.launch(
+                                    arrayOf(
+                                        EbookRepository.PDF_MIME,
+                                        EbookRepository.EPUB_MIME,
+                                        "application/octet-stream",
+                                    ),
+                                )
+                            },
+                            onRescanAll = viewModel::rescanAll,
+                            onRemoveFolder = viewModel::removeFolder,
+                            onOpenBook = onOpenBook,
+                            onOpenDossier = { book -> viewModel.openDossier(book.id) },
+                            onUpdateOrganization = viewModel::updateOrganization,
+                            onUpdateReadingStatus = viewModel::updateReadingStatus,
+                            onSetViewMode = viewModel::setViewMode,
+                            onToggleTheme = viewModel::toggleTheme,
+                        )
+                    }
+                }
 
-                Screen.DUPLICATES -> DuplicatesScreen(
-                    groups = state.duplicateGroups,
-                    onOpenBook = onOpenBook,
-                )
+                Screen.DUPLICATES -> {
+                    if (state.selectedDossierBookId != null) {
+                        viewModel.closeDossier()
+                    }
+                    DuplicatesScreen(
+                        groups = state.duplicateGroups,
+                        onOpenBook = onOpenBook,
+                    )
+                }
 
-                Screen.NOTES -> NotesScreen(
-                    notes = state.notes,
-                    onUpdateCollections = viewModel::updateNoteCollections,
-                )
+                Screen.NOTES -> {
+                    if (state.selectedDossierBookId != null) {
+                        viewModel.closeDossier()
+                    }
+                    NotesScreen(
+                        notes = state.notes,
+                        onUpdateCollections = viewModel::updateNoteCollections,
+                    )
+                }
 
-                Screen.SETTINGS -> SettingsScreen(
-                    state = state,
-                    onPreferredViewer = viewModel::setPreferredViewer,
-                    onRefreshViewers = viewModel::refreshViewers,
-                    onToggleTheme = viewModel::toggleTheme,
-                )
+                Screen.SETTINGS -> {
+                    if (state.selectedDossierBookId != null) {
+                        viewModel.closeDossier()
+                    }
+                    SettingsScreen(
+                        state = state,
+                        onPreferredViewer = viewModel::setPreferredViewer,
+                        onRefreshViewers = viewModel::refreshViewers,
+                        onToggleTheme = viewModel::toggleTheme,
+                    )
+                }
             }
 
             if (state.scanning) {

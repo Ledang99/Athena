@@ -97,6 +97,7 @@ fun LibraryShelfScreen(
     onRescanAll: () -> Unit,
     onRemoveFolder: (String) -> Unit,
     onOpenBook: (Book) -> Unit,
+    onOpenDossier: (Book) -> Unit,
     onUpdateOrganization: (Book, String, String?, List<String>, List<String>, ReadingStatus) -> Unit,
     onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
     onSetViewMode: (LibraryViewMode) -> Unit,
@@ -241,6 +242,7 @@ fun LibraryShelfScreen(
                             book = book,
                             duplicateKind = duplicateKinds[book.id],
                             onOpenBook = onOpenBook,
+                            onOpenDossier = onOpenDossier,
                             onEdit = { editingBook = book },
                             onUpdateReadingStatus = onUpdateReadingStatus,
                         )
@@ -258,6 +260,7 @@ fun LibraryShelfScreen(
                             book = book,
                             duplicateKind = duplicateKinds[book.id],
                             onOpenBook = onOpenBook,
+                            onOpenDossier = onOpenDossier,
                             onEdit = { editingBook = book },
                             onUpdateReadingStatus = onUpdateReadingStatus,
                         )
@@ -492,6 +495,7 @@ private fun BookTile(
     book: Book,
     duplicateKind: DuplicateKind?,
     onOpenBook: (Book) -> Unit,
+    onOpenDossier: (Book) -> Unit,
     onEdit: () -> Unit,
     onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
 ) {
@@ -502,7 +506,7 @@ private fun BookTile(
                 .fillMaxWidth()
                 .aspectRatio(0.68f)
                 .clip(RoundedCornerShape(4.dp))
-                .clickable { onOpenBook(book) },
+                .clickable { onOpenDossier(book) },
         ) {
             ShelfCover(book = book, modifier = Modifier.fillMaxSize())
             Box(
@@ -541,6 +545,7 @@ private fun BookTile(
                     onDismiss = { menuOpen = false },
                     book = book,
                     onOpenBook = onOpenBook,
+                    onOpenDossier = onOpenDossier,
                     onEdit = onEdit,
                     onUpdateReadingStatus = onUpdateReadingStatus,
                 )
@@ -574,13 +579,14 @@ private fun BookDetailRow(
     book: Book,
     duplicateKind: DuplicateKind?,
     onOpenBook: (Book) -> Unit,
+    onOpenDossier: (Book) -> Unit,
     onEdit: () -> Unit,
     onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        onClick = { onOpenBook(book) },
+        onClick = { onOpenDossier(book) },
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -635,6 +641,7 @@ private fun BookDetailRow(
                     onDismiss = { menuOpen = false },
                     book = book,
                     onOpenBook = onOpenBook,
+                    onOpenDossier = onOpenDossier,
                     onEdit = onEdit,
                     onUpdateReadingStatus = onUpdateReadingStatus,
                 )
@@ -649,15 +656,23 @@ private fun BookOverflowMenu(
     onDismiss: () -> Unit,
     book: Book,
     onOpenBook: (Book) -> Unit,
+    onOpenDossier: (Book) -> Unit,
     onEdit: () -> Unit,
     onUpdateReadingStatus: (Book, ReadingStatus) -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(
-            text = { Text("Open") },
+            text = { Text("Open reader") },
             onClick = {
                 onDismiss()
                 onOpenBook(book)
+            },
+        )
+        DropdownMenuItem(
+            text = { Text("Mind maps & notes") },
+            onClick = {
+                onDismiss()
+                onOpenDossier(book)
             },
         )
         DropdownMenuItem(

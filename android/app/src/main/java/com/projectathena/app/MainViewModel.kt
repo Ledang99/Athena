@@ -8,6 +8,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.projectathena.app.data.Book
+import com.projectathena.app.data.BookSummaryImage
 import com.projectathena.app.data.CapturedNote
 import com.projectathena.app.data.CatalogStats
 import com.projectathena.app.data.DuplicateGroup
@@ -43,6 +44,9 @@ data class AthenaUiState(
     val scanProgress: ScanProgress = ScanProgress(),
     val libraryFolders: List<LibraryFolder> = emptyList(),
     val viewMode: LibraryViewMode = LibraryViewMode.TILES,
+    val selectedDossierBookId: Long? = null,
+    val dossierImages: List<BookSummaryImage> = emptyList(),
+    val dossierNotes: List<CapturedNote> = emptyList(),
     val darkMode: Boolean = false,
     val preferredViewerPackage: String? = null,
     val availableViewers: List<ViewerApp> = emptyList(),
@@ -220,6 +224,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repository.updateNoteCollections(note.id, collections)
             }
             loadCatalog(message = "Note collections updated")
+        }
+    }
+
+    fun openDossier(bookId: Long) {
+        _uiState.update { it.copy(selectedDossierBookId = bookId) }
+        loadDossierData(bookId)
+    }
+
+    fun closeDossier() {
+        _uiState.update {
+            it.copy(
+                selectedDossierBookId = null,
+                dossierImages = emptyList(),
+                dossierNotes = emptyList(),
+            )
+        }
+    }
+
+    fun addSummaryImageToBook(bookId: Long, sourceUri: Uri, caption: String? = null) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                repository.addSummaryImage(bookId, sourceUri, caption)
+            }
+            if (result != null) {
+                loadDossierData(bookId)
+                _uiState.update { it.copy(message = "Summary image added") }
+            } else {
+                _uiState.update { it.copy(message = "Failed to import image") }
+            }
+        }
+    }
+
+    fun deleteSummaryImage(imageId: Long, bookId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.deleteSummaryImage(imageId)
+            }
+            loadDossierData(bookId)
+            _uiState.update { it.copy(message = "Summary image removed") }
+        }
+    }
+
+    fun addNoteToBook(bookId: Long, text: String) {
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.captureNote(text = text, sourcePackage = "Athena Dossier", bookId = bookId)
+            }
+            loadDossierData(bookId)
+            loadCatalog(message = "Note saved")
+        }
+    }
+
+    fun deleteNote(noteId: Long, bookId: Long?) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.deleteNote(noteId)
+            }
+            if (bookId != null) {
+                loadDossierData(bookId)
+            }
+            loadCatalog(message = "Note deleted")
+        }
+    }
+
+    private fun loadDossierData(bookId: Long) {
+        viewModelScope.launch {
+            val (images, notes) = withContext(Dispatchers.IO) {
+                Pair(repository.bookImages(bookId), repository.notesForBook(bookId))
+            }
+            _uiState.update {
+                it.copy(dossierImages = images, dossierNotes = notes)
+            }
         }
     }
 

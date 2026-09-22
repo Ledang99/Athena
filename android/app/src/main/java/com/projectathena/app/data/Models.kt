@@ -26,10 +26,19 @@ data class Book(
 
 data class CapturedNote(
     val id: Long,
+    val bookId: Long? = null,
     val text: String,
     val sourcePackage: String?,
     val collections: List<String> = emptyList(),
     val createdAt: Long,
+)
+
+data class BookSummaryImage(
+    val id: Long = 0,
+    val bookId: Long,
+    val imagePath: String,
+    val caption: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
 )
 
 data class CatalogStats(

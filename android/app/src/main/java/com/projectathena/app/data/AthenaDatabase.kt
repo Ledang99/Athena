@@ -44,6 +44,7 @@ class AthenaDatabase(context: Context) :
             """
             CREATE TABLE notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER,
                 text TEXT NOT NULL,
                 source_package TEXT,
                 collections TEXT,
@@ -51,6 +52,19 @@ class AthenaDatabase(context: Context) :
             )
             """.trimIndent(),
         )
+        database.execSQL("CREATE INDEX notes_book_idx ON notes(book_id)")
+        database.execSQL(
+            """
+            CREATE TABLE book_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                image_path TEXT NOT NULL,
+                caption TEXT,
+                created_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        database.execSQL("CREATE INDEX book_images_book_idx ON book_images(book_id)")
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -74,6 +88,22 @@ class AthenaDatabase(context: Context) :
             )
             database.execSQL("ALTER TABLE notes ADD COLUMN collections TEXT")
             database.execSQL("CREATE INDEX IF NOT EXISTS books_status_idx ON books(reading_status)")
+        }
+        if (oldVersion < 5) {
+            database.execSQL("ALTER TABLE notes ADD COLUMN book_id INTEGER")
+            database.execSQL("CREATE INDEX IF NOT EXISTS notes_book_idx ON notes(book_id)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS book_images (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    book_id INTEGER NOT NULL,
+                    image_path TEXT NOT NULL,
+                    caption TEXT,
+                    created_at INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS book_images_book_idx ON book_images(book_id)")
         }
     }
 
@@ -225,8 +255,14 @@ class AthenaDatabase(context: Context) :
         writableDatabase.update("books", values, "id = ?", arrayOf(bookId.toString()))
     }
 
-    fun addNote(text: String, sourcePackage: String?, collections: List<String> = emptyList()) {
+    fun addNote(
+        text: String,
+        sourcePackage: String?,
+        collections: List<String> = emptyList(),
+        bookId: Long? = null,
+    ) {
         val values = ContentValues().apply {
+            put("book_id", bookId)
             put("text", text.trim())
             put("source_package", sourcePackage)
             put("collections", encodeStringList(collections.distinct()).ifBlank { null })
@@ -253,17 +289,80 @@ class AthenaDatabase(context: Context) :
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
+                add(cursor.toCapturedNote())
+            }
+        }
+    }
+
+    fun notesForBook(bookId: Long): List<CapturedNote> = readableDatabase.query(
+        "notes",
+        null,
+        "book_id = ?",
+        arrayOf(bookId.toString()),
+        null,
+        null,
+        "created_at DESC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(cursor.toCapturedNote())
+            }
+        }
+    }
+
+    fun deleteNote(noteId: Long) {
+        writableDatabase.delete("notes", "id = ?", arrayOf(noteId.toString()))
+    }
+
+    fun addBookImage(bookId: Long, imagePath: String, caption: String? = null): Long {
+        val values = ContentValues().apply {
+            put("book_id", bookId)
+            put("image_path", imagePath)
+            put("caption", caption?.trim()?.ifBlank { null })
+            put("created_at", System.currentTimeMillis())
+        }
+        return writableDatabase.insert("book_images", null, values)
+    }
+
+    fun bookImages(bookId: Long): List<BookSummaryImage> = readableDatabase.query(
+        "book_images",
+        null,
+        "book_id = ?",
+        arrayOf(bookId.toString()),
+        null,
+        null,
+        "created_at DESC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
                 add(
-                    CapturedNote(
+                    BookSummaryImage(
                         id = cursor.long("id"),
-                        text = cursor.string("text"),
-                        sourcePackage = cursor.nullableString("source_package"),
-                        collections = decodeStringList(cursor.nullableString("collections")),
+                        bookId = cursor.long("book_id"),
+                        imagePath = cursor.string("image_path"),
+                        caption = cursor.nullableString("caption"),
                         createdAt = cursor.long("created_at"),
                     ),
                 )
             }
         }
+    }
+
+    fun deleteBookImage(imageId: Long): String? {
+        val path = readableDatabase.query(
+            "book_images",
+            arrayOf("image_path"),
+            "id = ?",
+            arrayOf(imageId.toString()),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+        writableDatabase.delete("book_images", "id = ?", arrayOf(imageId.toString()))
+        return path
     }
 
     fun catalogStats(): CatalogStats {
@@ -287,6 +386,15 @@ class AthenaDatabase(context: Context) :
         }
         return totals
     }
+
+    private fun Cursor.toCapturedNote() = CapturedNote(
+        id = long("id"),
+        bookId = nullableLong("book_id"),
+        text = string("text"),
+        sourcePackage = nullableString("source_package"),
+        collections = decodeStringList(nullableString("collections")),
+        createdAt = long("created_at"),
+    )
 
     private fun Cursor.toBook() = Book(
         id = long("id"),
@@ -340,6 +448,6 @@ class AthenaDatabase(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "athena.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
     }
 }

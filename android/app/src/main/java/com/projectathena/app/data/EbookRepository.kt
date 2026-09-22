@@ -35,10 +35,46 @@ class EbookRepository(private val context: Context) {
 
     fun notes(): List<CapturedNote> = database.notes()
 
+    fun notesForBook(bookId: Long): List<CapturedNote> = database.notesForBook(bookId)
+
     fun catalogStats(): CatalogStats = database.catalogStats()
 
-    fun captureNote(text: String, sourcePackage: String?) {
-        if (text.isNotBlank()) database.addNote(text, sourcePackage)
+    fun captureNote(text: String, sourcePackage: String?, bookId: Long? = null) {
+        if (text.isNotBlank()) database.addNote(text, sourcePackage, bookId = bookId)
+    }
+
+    fun deleteNote(noteId: Long) {
+        database.deleteNote(noteId)
+    }
+
+    fun bookImages(bookId: Long): List<BookSummaryImage> = database.bookImages(bookId)
+
+    fun addSummaryImage(bookId: Long, sourceUri: Uri, caption: String? = null): BookSummaryImage? {
+        val summariesDir = File(context.filesDir, "summaries").apply { mkdirs() }
+        val filename = "summary_${bookId}_${UUID.randomUUID()}.jpg"
+        val destination = File(summariesDir, filename)
+        val copied = runCatching {
+            resolver.openInputStream(sourceUri)?.use { input ->
+                FileOutputStream(destination).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }.isSuccess
+        if (!copied || !destination.isFile) return null
+        val id = database.addBookImage(bookId, destination.absolutePath, caption)
+        return BookSummaryImage(
+            id = id,
+            bookId = bookId,
+            imagePath = destination.absolutePath,
+            caption = caption,
+        )
+    }
+
+    fun deleteSummaryImage(imageId: Long) {
+        val path = database.deleteBookImage(imageId)
+        if (path != null) {
+            runCatching { File(path).delete() }
+        }
     }
 
     fun updateMetadata(bookId: Long, title: String, author: String?) {
