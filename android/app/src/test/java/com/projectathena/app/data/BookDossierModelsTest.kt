@@ -77,4 +77,27 @@ class BookDossierModelsTest {
         val labels = book.collectionLabels(listOf(cat))
         assertEquals(listOf("Startups & Solopreneurship", "Habits"), labels)
     }
+
+    @Test
+    fun bookTocItemAndChapterTextModels() {
+        val tocItem = BookTocItem(
+            title = "Chapter 1: The Renaissance of Self-Employment",
+            level = 1,
+            pageNumber = 15,
+            resourceHref = "text/chapter1.xhtml",
+        )
+        assertEquals("Chapter 1: The Renaissance of Self-Employment", tocItem.title)
+        assertEquals(1, tocItem.level)
+        assertEquals(15, tocItem.pageNumber)
+        assertEquals("text/chapter1.xhtml", tocItem.resourceHref)
+
+        val chapterText = ChapterText(
+            title = tocItem.title,
+            text = "To succeed in a business project, you must find where your skills intersect with what other people value.",
+            sourceRef = "Pages 15–24 of 280",
+        )
+        assertEquals(tocItem.title, chapterText.title)
+        assertEquals("Pages 15–24 of 280", chapterText.sourceRef)
+        assert(chapterText.text.contains("intersect"))
+    }
 }

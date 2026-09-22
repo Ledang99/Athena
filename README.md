@@ -70,8 +70,9 @@ No file operation is performed from either report.
 The native app in [`android/`](android/) is the phone-first reading inbox:
 
 Download the current test build:
-[`project-athena-v0.8.0-debug.zip`](releases/project-athena-v0.8.0-debug.zip)
+[`project-athena-v0.9.0-debug.zip`](releases/project-athena-v0.9.0-debug.zip)
 
+- **Table of Contents & Text Extraction (Phase B)**: extract embedded bookmarks, chapter outlines, and chapter texts from PDF and EPUB ebooks directly inside the Dossier, with one-tap excerpt saving to notes
 - **Book Dossier**: tap any book to open its dedicated study page
 - **Edit details**: full metadata, tag, status, and category editing right from the Dossier and Shelf
 - **Status dropdown**: easily select Unread / Reading / Finished from a dropdown

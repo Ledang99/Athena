@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -75,7 +76,9 @@ import androidx.compose.ui.window.DialogProperties
 import com.projectathena.app.data.Book
 import com.projectathena.app.data.BookCategory
 import com.projectathena.app.data.BookSummaryImage
+import com.projectathena.app.data.BookTocItem
 import com.projectathena.app.data.CapturedNote
+import com.projectathena.app.data.ChapterText
 import com.projectathena.app.data.ReadingStatus
 import com.projectathena.app.data.collectionLabels
 import java.io.File
@@ -91,6 +94,10 @@ fun BookDossierScreen(
     summaryImages: List<BookSummaryImage>,
     notes: List<CapturedNote>,
     categories: List<BookCategory> = emptyList(),
+    tocItems: List<BookTocItem> = emptyList(),
+    tocLoading: Boolean = false,
+    activeChapterText: ChapterText? = null,
+    extractingChapterText: Boolean = false,
     onBack: () -> Unit,
     onOpenBook: (Book) -> Unit,
     onAddSummaryImage: (Uri, String?) -> Unit,
@@ -99,6 +106,8 @@ fun BookDossierScreen(
     onDeleteNote: (Long) -> Unit,
     onUpdateReadingStatus: (ReadingStatus) -> Unit,
     onEditDetails: () -> Unit,
+    onSelectTocItem: (BookTocItem) -> Unit = {},
+    onDismissChapterText: () -> Unit = {},
 ) {
     var newNoteText by remember { mutableStateOf("") }
     var fullScreenImage by remember { mutableStateOf<BookSummaryImage?>(null) }
@@ -397,6 +406,97 @@ fun BookDossierScreen(
                     }
                 }
             }
+
+            // Table of Contents & Chapter Text Extraction Section
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            "Table of Contents & Chapters",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "Extracted chapters and sections. Tap any chapter to read or cite text.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            if (tocLoading) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Extracting Table of Contents…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else if (tocItems.isEmpty()) {
+                item {
+                    Text(
+                        "No embedded Table of Contents found in this ebook. You can open the book in Moon+ Reader to view all pages.",
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                items(tocItems) { tocItem ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectTocItem(tocItem) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    start = (16 + tocItem.level * 16).dp,
+                                    end = 16.dp,
+                                    top = 12.dp,
+                                    bottom = 12.dp,
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                tocItem.title,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (tocItem.level == 0) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (tocItem.pageNumber != null) {
+                                Text(
+                                    "p. ${tocItem.pageNumber}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -423,6 +523,113 @@ fun BookDossierScreen(
             },
         )
     }
+
+    // Chapter Text Extraction Dialog
+    if (extractingChapterText) {
+        AlertDialog(
+            onDismissRequest = onDismissChapterText,
+            title = { Text("Extracting Chapter Text") },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Extracting passages from document…")
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = onDismissChapterText) { Text("Cancel") }
+            },
+        )
+    } else if (activeChapterText != null) {
+        ChapterTextViewerDialog(
+            chapterText = activeChapterText,
+            onDismiss = onDismissChapterText,
+            onSaveExcerptAsNote = { excerpt ->
+                onAddNote(excerpt)
+            },
+        )
+    }
+}
+
+@Composable
+private fun ChapterTextViewerDialog(
+    chapterText: ChapterText,
+    onDismiss: () -> Unit,
+    onSaveExcerptAsNote: (String) -> Unit,
+) {
+    var savedNotice by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    chapterText.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (chapterText.sourceRef != null) {
+                    Text(
+                        chapterText.sourceRef,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+            ) {
+                if (savedNotice) {
+                    Text(
+                        "✓ Excerpt saved to My Notes & Insights",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        Text(
+                            chapterText.text,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 20.sp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val excerpt = "“${chapterText.text.take(300).trim()}…” — ${chapterText.title}"
+                    onSaveExcerptAsNote(excerpt)
+                    savedNotice = true
+                },
+            ) {
+                Text("Save excerpt to Notes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
 }
 
 @Composable

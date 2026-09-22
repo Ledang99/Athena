@@ -29,6 +29,19 @@ data class BookCategory(
     val label: String,
 )
 
+data class BookTocItem(
+    val title: String,
+    val level: Int = 0,
+    val pageNumber: Int? = null,
+    val resourceHref: String? = null,
+)
+
+data class ChapterText(
+    val title: String,
+    val text: String,
+    val sourceRef: String? = null,
+)
+
 data class CapturedNote(
     val id: Long,
     val bookId: Long? = null,

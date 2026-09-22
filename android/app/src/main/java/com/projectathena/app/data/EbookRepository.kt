@@ -14,6 +14,9 @@ import androidx.core.graphics.scale
 import androidx.documentfile.provider.DocumentFile
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import java.io.File
 import java.io.FileOutputStream
 import java.io.StringReader
@@ -117,6 +120,257 @@ class EbookRepository(private val context: Context) {
     fun deleteCategory(id: String) = database.deleteCategory(id)
 
     fun markOpened(bookId: Long) = database.markOpened(bookId)
+
+    fun extractTableOfContents(book: Book): List<BookTocItem> {
+        val uri = Uri.parse(book.uri)
+        return when (book.mimeType) {
+            PDF_MIME -> extractPdfToc(uri)
+            EPUB_MIME -> extractEpubToc(uri)
+            else -> emptyList()
+        }
+    }
+
+    fun extractChapterText(book: Book, tocItem: BookTocItem): ChapterText? {
+        val uri = Uri.parse(book.uri)
+        return when (book.mimeType) {
+            PDF_MIME -> extractPdfChapterText(uri, tocItem)
+            EPUB_MIME -> extractEpubChapterText(uri, tocItem)
+            else -> null
+        }
+    }
+
+    private fun extractPdfToc(uri: Uri): List<BookTocItem> = runCatching {
+        resolver.openInputStream(uri)?.use { input ->
+            PDDocument.load(input).use { document ->
+                val outline = document.documentCatalog.documentOutline ?: return emptyList()
+                val items = mutableListOf<BookTocItem>()
+                fun traverse(node: PDOutlineNode, level: Int) {
+                    var current: PDOutlineItem? = node.firstChild
+                    while (current != null) {
+                        val title = current.title?.trim().orEmpty()
+                        val pageNumber = runCatching {
+                            val dest = current.destination
+                            val page = when {
+                                dest is com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageDestination -> dest.page
+                                current.action is com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionGoTo -> {
+                                    val action = current.action as com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionGoTo
+                                    (action.destination as? com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageDestination)?.page
+                                }
+                                else -> null
+                            }
+                            if (page != null) document.pages.indexOf(page) + 1 else null
+                        }.getOrNull()
+
+                        if (title.isNotBlank()) {
+                            items += BookTocItem(
+                                title = title,
+                                level = level,
+                                pageNumber = pageNumber,
+                            )
+                        }
+                        if (current.hasChildren()) {
+                            traverse(current, level + 1)
+                        }
+                        current = current.nextSibling
+                    }
+                }
+                traverse(outline, 0)
+                items
+            }
+        } ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    private fun extractPdfChapterText(uri: Uri, tocItem: BookTocItem): ChapterText? = runCatching {
+        resolver.openInputStream(uri)?.use { input ->
+            PDDocument.load(input).use { document ->
+                val totalPages = document.numberOfPages
+                if (totalPages == 0) return null
+                val startPage = (tocItem.pageNumber ?: 1).coerceIn(1, totalPages)
+                // Extract up to 10 pages per section/chapter preview to remain fast and responsive
+                val endPage = (startPage + 9).coerceAtMost(totalPages)
+                val stripper = PDFTextStripper().apply {
+                    this.startPage = startPage
+                    this.endPage = endPage
+                }
+                val text = stripper.getText(document).trim()
+                val pageRef = if (startPage == endPage) "Page $startPage" else "Pages $startPage–$endPage of $totalPages"
+                ChapterText(
+                    title = tocItem.title,
+                    text = text.ifBlank { "No extractable text found on $pageRef (the page might be a scanned image)." },
+                    sourceRef = pageRef,
+                )
+            }
+        }
+    }.getOrNull()
+
+    private fun extractEpubToc(uri: Uri): List<BookTocItem> = runCatching {
+        resolver.openInputStream(uri)?.use { input ->
+            ZipInputStream(input).use zipUse@ { zip ->
+                var opfEntry: String? = null
+                var ncxEntry: String? = null
+                var navXhtmlEntry: String? = null
+                val zipEntries = mutableMapOf<String, ByteArray>()
+
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (!entry.isDirectory) {
+                        val lower = entry.name.lowercase()
+                        if (lower.endsWith(".opf")) {
+                            opfEntry = entry.name
+                            zipEntries[entry.name] = readLimited(zip, 2 * 1024 * 1024)
+                        } else if (lower.endsWith(".ncx")) {
+                            ncxEntry = entry.name
+                            zipEntries[entry.name] = readLimited(zip, 2 * 1024 * 1024)
+                        } else if (lower.contains("nav") && (lower.endsWith(".xhtml") || lower.endsWith(".html"))) {
+                            navXhtmlEntry = entry.name
+                            zipEntries[entry.name] = readLimited(zip, 2 * 1024 * 1024)
+                        }
+                    }
+                }
+
+                // Try parsing NCX (EPUB 2 / standard) first
+                val ncxBytes = ncxEntry?.let { zipEntries[it] }
+                if (ncxBytes != null) {
+                    val ncxItems = parseNcxToc(ncxBytes, opfEntry.orEmpty())
+                    if (ncxItems.isNotEmpty()) return@zipUse ncxItems
+                }
+
+                // Fallback to EPUB 3 Navigation Document
+                val navBytes = navXhtmlEntry?.let { zipEntries[it] }
+                if (navBytes != null) {
+                    val navItems = parseNavXhtmlToc(navBytes, opfEntry.orEmpty())
+                    if (navItems.isNotEmpty()) return@zipUse navItems
+                }
+
+                emptyList()
+            }
+        } ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    private fun parseNcxToc(bytes: ByteArray, opfEntry: String): List<BookTocItem> = runCatching {
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(StringReader(bytes.toString(Charsets.UTF_8)))
+        }
+        val items = mutableListOf<BookTocItem>()
+        var currentLevel = 0
+        var currentTitle: String? = null
+        var currentSrc: String? = null
+
+        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+            when (parser.eventType) {
+                XmlPullParser.START_TAG -> {
+                    val name = parser.name.substringAfter(':').lowercase()
+                    when (name) {
+                        "navpoint" -> currentLevel++
+                        "text" -> {
+                            if (currentTitle == null) {
+                                currentTitle = runCatching { parser.nextText() }.getOrNull()?.trim()
+                            }
+                        }
+                        "content" -> {
+                            currentSrc = parser.attribute("src")
+                        }
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    val name = parser.name.substringAfter(':').lowercase()
+                    if (name == "navpoint") {
+                        if (!currentTitle.isNullOrBlank()) {
+                            val resolved = currentSrc?.let { resolveZipEntry(opfEntry, it) }
+                            items += BookTocItem(
+                                title = currentTitle,
+                                level = (currentLevel - 1).coerceAtLeast(0),
+                                resourceHref = resolved ?: currentSrc,
+                            )
+                        }
+                        currentTitle = null
+                        currentSrc = null
+                        currentLevel = (currentLevel - 1).coerceAtLeast(0)
+                    }
+                }
+            }
+            parser.next()
+        }
+        items
+    }.getOrDefault(emptyList())
+
+    private fun parseNavXhtmlToc(bytes: ByteArray, opfEntry: String): List<BookTocItem> = runCatching {
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(StringReader(bytes.toString(Charsets.UTF_8)))
+        }
+        val items = mutableListOf<BookTocItem>()
+        var inNav = false
+        var currentHref: String? = null
+
+        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+            when (parser.eventType) {
+                XmlPullParser.START_TAG -> {
+                    val name = parser.name.substringAfter(':').lowercase()
+                    if (name == "nav") {
+                        inNav = true
+                    } else if (inNav && name == "a") {
+                        currentHref = parser.attribute("href")
+                        val text = runCatching { parser.nextText() }.getOrNull()?.trim()
+                        if (!text.isNullOrBlank()) {
+                            val resolved = currentHref?.let { resolveZipEntry(opfEntry, it) }
+                            items += BookTocItem(
+                                title = text,
+                                level = 0,
+                                resourceHref = resolved ?: currentHref,
+                            )
+                        }
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    val name = parser.name.substringAfter(':').lowercase()
+                    if (name == "nav") inNav = false
+                }
+            }
+            parser.next()
+        }
+        items
+    }.getOrDefault(emptyList())
+
+    private fun extractEpubChapterText(uri: Uri, tocItem: BookTocItem): ChapterText? = runCatching {
+        val targetHref = tocItem.resourceHref?.substringBefore('#') ?: return null
+        val targetAnchor = tocItem.resourceHref.substringAfter('#', "")
+
+        resolver.openInputStream(uri)?.use { input ->
+            ZipInputStream(input).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (!entry.isDirectory && (entry.name.equals(targetHref, ignoreCase = true) || entry.name.endsWith(targetHref, ignoreCase = true))) {
+                        val rawHtml = String(readLimited(zip, 2 * 1024 * 1024), Charsets.UTF_8)
+                        val text = stripHtmlToText(rawHtml)
+                        return ChapterText(
+                            title = tocItem.title,
+                            text = text.ifBlank { "No readable text content found in this chapter." },
+                            sourceRef = entry.name.substringAfterLast('/'),
+                        )
+                    }
+                }
+                null
+            }
+        }
+    }.getOrNull()
+
+    private fun stripHtmlToText(html: String): String {
+        return html
+            .replace(Regex("<style[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<script[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<head[\\s\\S]*?</head>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("(?i)<(br|p|div|h[1-6]|li|tr|blockquote)[^>]*>"), "\n")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+    }
 
     fun scanFolder(
         treeUri: Uri,

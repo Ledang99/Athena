@@ -10,7 +10,9 @@ import androidx.lifecycle.viewModelScope
 import com.projectathena.app.data.Book
 import com.projectathena.app.data.BookCategory
 import com.projectathena.app.data.BookSummaryImage
+import com.projectathena.app.data.BookTocItem
 import com.projectathena.app.data.CapturedNote
+import com.projectathena.app.data.ChapterText
 import com.projectathena.app.data.CatalogStats
 import com.projectathena.app.data.DuplicateGroup
 import com.projectathena.app.data.EbookRepository
@@ -48,6 +50,10 @@ data class AthenaUiState(
     val selectedDossierBookId: Long? = null,
     val dossierImages: List<BookSummaryImage> = emptyList(),
     val dossierNotes: List<CapturedNote> = emptyList(),
+    val dossierToc: List<BookTocItem> = emptyList(),
+    val dossierTocLoading: Boolean = false,
+    val activeChapterText: ChapterText? = null,
+    val extractingChapterText: Boolean = false,
     val categories: List<BookCategory> = emptyList(),
     val darkMode: Boolean = false,
     val preferredViewerPackage: String? = null,
@@ -240,6 +246,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selectedDossierBookId = null,
                 dossierImages = emptyList(),
                 dossierNotes = emptyList(),
+                dossierToc = emptyList(),
+                dossierTocLoading = false,
+                activeChapterText = null,
+                extractingChapterText = false,
             )
         }
     }
@@ -293,13 +303,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadDossierData(bookId: Long) {
         viewModelScope.launch {
+            _uiState.update { it.copy(dossierTocLoading = true) }
             val (images, notes) = withContext(Dispatchers.IO) {
                 Pair(repository.bookImages(bookId), repository.notesForBook(bookId))
             }
+            val book = _uiState.value.books.firstOrNull { it.id == bookId }
+            val toc = if (book != null) {
+                withContext(Dispatchers.IO) {
+                    repository.extractTableOfContents(book)
+                }
+            } else {
+                emptyList()
+            }
             _uiState.update {
-                it.copy(dossierImages = images, dossierNotes = notes)
+                it.copy(
+                    dossierImages = images,
+                    dossierNotes = notes,
+                    dossierToc = toc,
+                    dossierTocLoading = false,
+                )
             }
         }
+    }
+
+    fun extractChapterText(book: Book, tocItem: BookTocItem) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(extractingChapterText = true) }
+            val extracted = withContext(Dispatchers.IO) {
+                repository.extractChapterText(book, tocItem)
+            }
+            _uiState.update {
+                it.copy(
+                    extractingChapterText = false,
+                    activeChapterText = extracted,
+                )
+            }
+        }
+    }
+
+    fun dismissChapterText() {
+        _uiState.update { it.copy(activeChapterText = null, extractingChapterText = false) }
     }
 
     fun markOpened(book: Book) {

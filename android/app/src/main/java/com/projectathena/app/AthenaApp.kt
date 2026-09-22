@@ -235,6 +235,10 @@ fun AthenaApp(
                             summaryImages = state.dossierImages,
                             notes = state.dossierNotes,
                             categories = state.categories,
+                            tocItems = state.dossierToc,
+                            tocLoading = state.dossierTocLoading,
+                            activeChapterText = state.activeChapterText,
+                            extractingChapterText = state.extractingChapterText,
                             onBack = viewModel::closeDossier,
                             onOpenBook = onOpenBook,
                             onAddSummaryImage = { uri, caption ->
@@ -255,6 +259,10 @@ fun AthenaApp(
                             onEditDetails = {
                                 editingDossierBook = dossierBook
                             },
+                            onSelectTocItem = { tocItem ->
+                                viewModel.extractChapterText(dossierBook, tocItem)
+                            },
+                            onDismissChapterText = viewModel::dismissChapterText,
                         )
                         editingDossierBook?.let { bookToEdit ->
                             // Use latest state of book if available
